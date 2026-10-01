@@ -1,0 +1,4 @@
+.gradle/
+.acside/
+build/
+local.properties
