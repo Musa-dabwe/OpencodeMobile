@@ -48,7 +48,7 @@ Reuse: the `runtime/` package (PRoot installer, foreground service) is MIT. Adap
 ```
 
 - proot shares the Android network namespace, so the app reaches the in-proot server on `127.0.0.1:<port>`.
-- Bind to loopback only. Enable HTTP basic auth with a random per-install password (OpenCode documents `OPENCODE_SERVER_PASSWORD`, username `opencode`; **\[VERIFY\]** same in v2). Password lives in Keystore.
+- Bind to loopback only. Enable HTTP basic auth with a random per-install password. **Confirmed on v2.0.22**: auth is HTTP Basic, username is exactly `opencode`, password comes from `OPENCODE_SERVER_PASSWORD`. If the variable is unset the server runs unsecured (it only prints a warning), so the app must always set it. Wrong credentials return 401. Password lives in Keystore.
 
 ### 2.1 Runtime layout (internal storage)
 
@@ -97,7 +97,15 @@ The installed binary name may be `opencode` or `opencode2`. **\[VERIFY\]**.
 
 ### 3.3 Starting the server
 
-v2 runs as a background service by default; the community wrapper needed `--standalone` inside proot because the background server froze. **\[VERIFY\]** the correct headless command and flags (`serve`, `--standalone`, port, hostname). Requirements:
+v2 runs as a background service by default; the community wrapper needed `--standalone` inside proot because the background server froze. A Phase 0 run on v2.0.22 (Ubuntu/glibc build, arm64) confirmed the pattern:
+
+```
+OPENCODE_SERVER_PASSWORD=<secret> opencode serve --hostname 127.0.0.1 --port <port>
+```
+
+with the binary at `node_modules/@opencode/cli-linux-arm64/bin/opencode` after an npm install. The musl build could not run on that glibc host, as expected. **\[VERIFY\]** the same on Alpine.
+
+Requirements:
 
 - listen on `127.0.0.1` only, fixed port chosen by the app
 - health check via `GET /api/info` (server identity and readiness)
@@ -125,6 +133,7 @@ Base: `http://127.0.0.1:<port>/api/...`. OpenAPI spec: `https://opencode.ai/v2/o
 | history (paged) | `GET /api/session/{id}/message` (cursor, `type` filter) |
 | context | `GET /api/session/{id}/context` |
 | stop | `POST /api/session/{id}/interrupt` |
+| child sessions (sub-agents) | session `parentID` / children listing **\[VERIFY\]** route in the OpenAPI spec |
 | fork / compact | `POST .../fork`, `POST .../compact` |
 | slash commands | `GET /api/command`, `POST .../command` |
 | shell in session | `POST /api/session/{id}/shell` |
@@ -135,7 +144,7 @@ Base: `http://127.0.0.1:<port>/api/...`. OpenAPI spec: `https://opencode.ai/v2/o
 | diffs / revert | `GET .../diff`, `POST .../revert/stage`, `.../revert/commit`, `DELETE .../revert` |
 | files | `GET /api/fs/read/*`, `/api/fs/list`, `/api/fs/find` |
 | terminal | `/api/pty` (create, WebSocket connect token) |
-| live events | `GET /api/event` (SSE) **\[VERIFY exact path\]**; durable replay: `GET /api/experimental/session/{id}/log?after=&follow=true` |
+| live events | `GET /api/event` (SSE; **confirmed path on v2.0.22** — `/event` is not the stream); durable replay: `GET /api/experimental/session/{id}/log?after=&follow=true` |
 | MCP | `GET /api/mcp` and experimental add/connect/disconnect |
 | git | `GET /api/vcs/status`, `/api/vcs/diff` |
 
@@ -199,6 +208,47 @@ List integrations from the API. For key-based providers, send the key to `POST /
 
 ---
 
+### 5.8 Port rule
+
+The reference is the OpenCode Desktop app (source: the OpenCode repo, `packages/app` and `packages/desktop`). Phase 0 must clone it and produce `docs/desktop-port-map.md`: for each Desktop screen, dialog, button and settings row, the Compose composable that will replace it. Keep Desktop's naming, ordering, icons and behavior; adapt only where touch or screen size requires (e.g. sidebar becomes a bottom sheet, tabs become the session switcher).
+
+- Branding: no references to other vendors' agents anywhere in the UI. The app is OpenCode only.
+
+### 5.9 Sub-agents (first-class feature)
+
+OpenCode lets a primary agent delegate work to sub-agents, each running in its own child session. The app must support sub-agent driven development end to end, not just show it. Sub-agents are sessions inside the same server process, so running several in parallel costs tokens and network, not extra Android processes.
+
+#### Agent management (Settings → Agents, also reachable from the agent picker)
+
+- List agents from `GET /api/agent`, grouped Primary / Sub-agent, with built-in vs custom marked.
+- Create, edit and delete custom agents. Agents are markdown files with frontmatter in `.opencode/agents/` (project) and `~/.config/opencode/agents/` (global); **\[VERIFY\]** the v2 file format and fields against the docs. Editor fields: name, description, mode (primary / subagent), model override, allowed tools and permissions, system prompt. Save by writing the file, then refresh the list.
+- "Start from template": ships four optional starter agents (explorer: read-only codebase search; implementer; reviewer; tester). Created only on tap, never seeded automatically.
+
+#### Invoking
+
+- `@agent-name` in the composer (separate "Agents" group above files in the @ picker). Sends the name in `agents[]` of the prompt.
+- Primary agents also delegate on their own; the UI must render that identically.
+- Optional per-agent model override picker in the agent editor.
+
+#### Chat treatment
+
+- Each delegation renders as a sub-agent card: agent name, task title, status (queued / running / done / failed), elapsed time, tool count, and a collapsed live timeline of its tool calls. Running state uses the shimmer bar.
+- Parallel sub-agents stack as separate cards; the top bar shows a pill "N agents running" that opens a bottom sheet listing them with per-agent Stop.
+- Tap a card, or "Open session", to open the child session full screen with a back arrow to the parent and a breadcrumb "Parent › agent". Child sessions appear nested under their parent in the session switcher (tree by parent id).
+- Permission and question cards raised by a sub-agent are labeled with the agent's name and appear in the parent chat so the user is never blocked silently.
+- Stopping the parent interrupts its children; individual children can also be interrupted (`/interrupt` on the child session).
+- Results: when a sub-agent finishes, show its summary inline in the card; the parent's following message continues the conversation as normal.
+
+#### Android behavior
+
+- Foreground notification text reflects activity, e.g. "2 agents running"; completion notification names the agent.
+- Cap concurrent visible live timelines (default 3 expanded) to keep Compose recomposition cheap; others show headline only.
+- Child sessions are included in the SSE stream and in the session log replay, so reconnecting restores their state.
+
+**Acceptance**: from a prompt like "use the explorer agent to find where retries happen, then have the implementer add backoff", the user sees two sub-agent cards, can open either child session, answer a permission prompt raised by one, and stop one while the other continues.
+
+---
+
 ## 6. Rich chat rendering
 
 Message types from the API: `user`, `assistant`, `system`, `synthetic`, `skill`, `shell`, `compaction`, `agent-switched`, `model-switched`, `location-switched`. Render each distinctly.
@@ -216,7 +266,7 @@ Collapsible cards with icon, title, status (pending / running / done / error), d
 - **shell / bash**: monospace output, exit state, stop button if running.
 - **edit / write**: inline diff using `diff.*` tokens, tap for full diff view.
 - **read / grep / find**: compact file list with tap-to-open.
-- **subagent**: nested collapsible timeline.
+- **subagent**: rich card, see 5.9.
 - Unknown tools: pretty-printed JSON input/output.
 
 ### 6.3 Media (image, audio, video)
@@ -234,12 +284,6 @@ Detect media in three places: (a) user attachments, (b) markdown image/link synt
 Use `files[]` in the prompt body. **\[VERIFY\]** the `PromptInput.FileAttachment` shape in the OpenAPI schema (path vs inline base64 and mime). Copy picked Android content URIs into `workspace/.attachments/` first, then reference by path.
 
 ---
-
-### 5.8 Port rule
-
-The reference is the OpenCode Desktop app (source: the OpenCode repo, `packages/app` and `packages/desktop`). Phase 0 must clone it and produce `docs/desktop-port-map.md`: for each Desktop screen, dialog, button and settings row, the Compose composable that will replace it. Keep Desktop's naming, ordering, icons and behavior; adapt only where touch or screen size requires (e.g. sidebar becomes a bottom sheet, tabs become the session switcher).
-
-- Branding: no references to other vendors' agents anywhere in the UI. The app is OpenCode only.
 
 ## 7. Visual design: OpenCode look
 
@@ -296,7 +340,7 @@ Implementation:
 5. Extract the `opencode` theme tokens.
 6. Test PTY WebSocket from the app.
 
-**Phase 1:** runtime service, setup flow, typed client, Chat with streaming text, tool cards, permissions, provider setup, theme. **Phase 2:** media rendering, attachments, diffs and revert, Files, Terminal, session management. **Phase 3:** settings packs, diagnostics, theme import, polish and animation pass.
+**Phase 1:** runtime service, setup flow, typed client, Chat with streaming text, tool cards, permissions, provider setup, theme. **Phase 2:** media rendering, attachments, diffs and revert, Files, Terminal, session management, sub-agent cards, child-session navigation and agent management (5.9). **Phase 3:** settings packs, diagnostics, theme import, polish and animation pass.
 
 Acceptance for Phase 1: fresh install → setup completes offline-resumable → key entered → prompt streams → file edited in workspace → diff visible → permission prompt answered.
 
