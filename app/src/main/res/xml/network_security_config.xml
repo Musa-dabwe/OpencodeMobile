@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is permitted ONLY for loopback, because the OpenCode server runs inside proot
+  and is reached at http://127.0.0.1:<port>. proot shares Android's network namespace, so the
+  app connects to the in-proot server over loopback with no TLS.
+
+  This is deliberately NOT `android:usesCleartextTraffic="true"`: that would allow cleartext to
+  every host the app ever talks to, including any remote endpoint. Here the allow-list is
+  loopback-only, so all real provider traffic still requires TLS and stays subject to normal
+  certificate validation.
+
+  Verified on device: without this, requests fail with
+  "CLEARTEXT communication to 127.0.0.1 not permitted by network security policy".
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <!-- IPv6 loopback, in case the server binds ::1 on a future Android version. -->
+        <domain includeSubdomains="false">::1</domain>
+    </domain-config>
+</network-security-config>
