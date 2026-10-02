@@ -89,8 +89,8 @@ Findings:
 
 Install order (implement as a fallback chain, stop at first that passes `opencode --version`):
 
-1. **Standalone musl arm64 binary** from the official v2 release. Verify SHA-256. Install to `/usr/local/bin/opencode`. **\[VERIFY\]** exact download URL and checksum source on opencode.ai/v2/docs.
-2. **npm**: `apk add nodejs npm`, then `npm i -g @opencode/cli`. If postinstall picks the wrong (glibc) binary, install the `-musl` platform package and copy the binary into place by hand. **\[VERIFY\]** package names.
+1. **Standalone musl arm64 binary** from the official v2 release. Verify SHA-256. Install to `/usr/local/bin/opencode`. **\[VERIFY\]** exact download URL and checksum source on opencode.ai/v2/docs. **Answered**: the v2 installer maps musl targets to the npm package `@opencode/cli-linux-arm64-musl`; resolve the version from `https://opencode.ai/update/api/latest/cli/npm` and take the checksum from that package's `dist.integrity` / `dist.shasum`.
+2. **npm**: `apk add nodejs npm`, then `npm i -g @opencode/cli`. If postinstall picks the wrong (glibc) binary, install the `-musl` platform package and copy the binary into place by hand. **\[VERIFY\]** package names. **Superseded**: the v2 installer resolves musl targets to the npm package `@opencode/cli-linux-arm64-musl` directly, and that package has **no dependencies** — it is a self-contained binary, so Node.js is not required on Alpine. Resolve the current version from `https://opencode.ai/update/api/latest/cli/npm`, which returns `{"package":"@opencode/cli","version":"2.0.22","ref":"refs/heads/v2"}`. npm's per-version `dist.integrity` (sha512) and `dist.shasum` are the checksum source, not a docs page. Unpacked size is ~199 MB, which dominates first-run download time.
 3. If both fail on musl, **report it**. Do not silently switch to Ubuntu. (Decision for Musa: Alpine vs Ubuntu fallback.)
 
 The installed binary name may be `opencode` or `opencode2`. **\[VERIFY\]**.
