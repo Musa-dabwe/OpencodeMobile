@@ -8,6 +8,7 @@ composeBom = "2025.10.01"
 ktor = "3.2.4"
 kotlinxSerialization = "1.8.1"
 kotlinxCoroutines = "1.10.2"
+junit = "4.13.2"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -34,3 +35,4 @@ ktor-client-logging = { group = "io.ktor", name = "ktor-client-logging", version
 ktor-client-websockets = { group = "io.ktor", name = "ktor-client-websockets", version.ref = "ktor" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }

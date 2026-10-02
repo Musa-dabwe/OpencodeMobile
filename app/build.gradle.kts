@@ -33,6 +33,14 @@ android {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget("17"))
         }
     }
+
+    // The recorded server responses in docs/samples are the fixtures for the unit tests, so
+    // they are put on the test classpath as-is rather than copied into the source tree.
+    sourceSets {
+        getByName("test") {
+            resources.srcDir(rootProject.layout.projectDirectory.dir("docs/samples"))
+        }
+    }
 }
 
 dependencies {
@@ -55,4 +63,6 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
 }
