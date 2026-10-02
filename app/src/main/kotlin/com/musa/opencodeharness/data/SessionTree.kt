@@ -44,11 +44,14 @@ data class SessionNode(
  *  - Duplicate ids: first occurrence wins. Ids are primary keys and unique per session, so a
  *    duplicate means two overlapping pages were merged; first-wins is deterministic and guarantees
  *    no session is rendered twice.
- *  - `parentID` cycles (A -> B -> A) and self-parenting: every node in a pure cycle has a *known*
- *    parent, so none qualifies as a root and the whole group would otherwise vanish. Nodes not
- *    reachable from any root are promoted to the top level as childless entries (each cycle member
- *    is its own entry, so none is lost or listed twice), and expansion never descends into a
- *    session already on the current path, so a cycle can neither recurse forever nor nest itself.
+ *  - `parentID` cycles (A -> B -> A) and self-parenting (A -> A): every node in such a cycle has a
+ *    *known* parent, so none qualifies as a root and the whole group would otherwise vanish.
+ *    Nothing reachable from a root is promoted to the top level as childless entries -- each cycle
+ *    member becomes its own entry, so none is lost or listed twice. This covers a session hanging
+ *    OFF a cycle member too (C with parentID = A): C is stranded rather than cyclic, and is
+ *    promoted by the same path, giving up its placement under A but keeping its `parentID` on the
+ *    record. Expansion never descends into a session already on the current path, so a cycle can
+ *    neither recurse forever nor nest itself.
  */
 fun buildSessionTree(sessions: List<SessionInfo>): List<SessionNode> {
     if (sessions.isEmpty()) return emptyList()
@@ -74,9 +77,16 @@ fun buildSessionTree(sessions: List<SessionInfo>): List<SessionNode> {
     val roots = byId.values.filter(::isRoot)
     val tree = roots.map { expand(it, ancestors = setOf(it.id)) }
 
-    // Anything a root walk cannot reach is part of a parentID cycle; promote it so the "appears
-    // exactly once" invariant still holds. Every promoted id is seeded as already-on-the-path so
-    // the members of one cycle cannot become each other's children and double up.
+    // A root walk cannot reach two kinds of session, and BOTH are promoted to the top level so
+    // the "appears exactly once" invariant still holds:
+    //   1. the members of a parentID cycle (A <-> B), whose every parent link points inside the
+    //      cycle, so nothing in it can ever be a root;
+    //   2. anything hanging OFF a cycle member (C with parentID = A) -- C is not in a cycle
+    //      itself, it is simply stranded because its parent is only reachable through the cycle.
+    // Promoting C loses its placement under A, but it keeps its own `parentID` on the record and
+    // stays visible, which is the same trade the orphan rule makes.
+    // Every promoted id is seeded as already-on-the-path, so cycle members cannot end up as each
+    // other's children and be emitted twice.
     val reachable = HashSet<String>()
     val queue = ArrayDeque(roots)
     while (queue.isNotEmpty()) {
@@ -87,7 +97,8 @@ fun buildSessionTree(sessions: List<SessionInfo>): List<SessionNode> {
 
     val promoted = byId.keys - reachable
     val promotedIds = promoted.toSet()
-    return tree + promoted.mapNotNull(byId::get).map { expand(it, ancestors = promotedIds + it.id) }
+    // getValue, not mapNotNull: every id in `promoted` came out of `byId.keys` moments ago.
+    return tree + promoted.map { byId.getValue(it) }.map { expand(it, ancestors = promotedIds + it.id) }
 }
 
 /**

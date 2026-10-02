@@ -206,8 +206,16 @@ class SessionTreeTest {
         assertEquals(setOf("ses_root", "ses_child"), tree.flattenIds().toSet())
     }
 
+    /**
+     * A cycle (A <-> B) must be PROMOTED to the top level as its own entries, per the KDoc.
+     *
+     * These assertions pin the *placement*, not just membership. Asserting only on
+     * [flattenIds] would pass just as happily if the cycle members were nested under `ses_root`
+     * instead -- which is a different, wrong tree -- so the top-level count and each top-level
+     * entry's emptiness are what actually lock the documented behaviour down.
+     */
     @Test
-    fun parentIdCycle_doesNotHangAndKeepsEverySessionVisible() {
+    fun parentIdCycle_promotesMembersToTopLevelAsChildlessEntries() {
         // A -> B -> A: neither has an absent parent, so neither is a root by the plain rule.
         val tree = buildSessionTree(
             listOf(
@@ -217,9 +225,94 @@ class SessionTreeTest {
             ),
         )
 
+        // THE load-bearing assertion: three TOP-LEVEL entries, not one root with two nested
+        // children. This is the assertion that fails if promotion is replaced by nesting.
+        assertEquals("cycle members become top-level entries", 3, tree.size)
+        assertEquals(listOf("ses_root", "ses_a", "ses_b"), tree.map { it.session.id })
+        // Each promoted entry is childless: A and B are not each other's children.
+        assertTrue(
+            "promoted cycle members must be childless",
+            tree.filter { it.session.id != "ses_root" }.all { it.children.isEmpty() },
+        )
+        // The genuine root is untouched, and the promoted entries carry no children of their own.
+        assertTrue("the real root has no children either", tree.first().children.isEmpty())
+        // Nothing lost, nothing duplicated.
         assertEquals(3, tree.flattenIds().size)
         assertEquals(setOf("ses_a", "ses_b", "ses_root"), tree.flattenIds().toSet())
-        assertTrue("no session is its own descendant", tree.all { node -> node.session.id !in node.children.flattenIds() })
+        assertTrue(
+            "no session is its own descendant",
+            tree.all { node -> node.session.id !in node.children.flattenIds() },
+        )
+    }
+
+    /**
+     * Self-parenting (A -> A) is claimed by the KDoc and must not hang or vanish: A is its own
+     * parent, so it is unreachable from any root and is promoted like a cycle member.
+     */
+    @Test
+    fun selfParentingSession_isPromotedToTopLevelAndDoesNotHang() {
+        val tree = buildSessionTree(listOf(session("ses_self", "ses_self")))
+
+        // The tree has no genuine root here, so promotion is the ONLY thing that keeps it
+        // non-empty. A single nested entry would fail this count.
+        assertEquals(1, tree.size)
+        assertEquals("ses_self", tree.single().session.id)
+        assertTrue("a self-parent is not its own child", tree.single().children.isEmpty())
+        assertEquals(listOf("ses_self"), tree.flattenIds())
+    }
+
+    @Test
+    fun selfParentingSessionAlongsideARealRoot_staysChildlessAndSeparate() {
+        val tree = buildSessionTree(
+            listOf(
+                session("ses_root"),
+                session("ses_child", "ses_root"),
+                session("ses_self", "ses_self"),
+            ),
+        )
+
+        // The real root keeps its child; the self-parent is a separate top-level entry.
+        assertEquals(listOf("ses_root", "ses_self"), tree.map { it.session.id })
+        assertEquals(listOf("ses_child"), tree.first().children.map { it.session.id })
+        assertTrue("the self-parent must not nest anywhere", tree.last().children.isEmpty())
+        assertEquals(3, tree.flattenIds().size)
+    }
+
+    /**
+     * A session hanging OFF a cycle member (C with parentID = A, where A <-> B) is not in a cycle
+     * itself -- it is stranded, because its only parent link leads into one. It goes through the
+     * same promotion path, so it is promoted to the top level and gives up its placement under A.
+     * That placement loss is the documented trade: C keeps its `parentID` on the record and stays
+     * visible, exactly like an orphan.
+     */
+    @Test
+    fun sessionHangingOffACycleMember_isPromotedByTheSamePath() {
+        val tree = buildSessionTree(
+            listOf(
+                session("ses_a", "ses_b"),
+                session("ses_b", "ses_a"),
+                session("ses_off_cycle", "ses_a"),
+                session("ses_root"),
+            ),
+        )
+
+        // All four end up top level: the real root plus the three stranded sessions.
+        assertEquals(4, tree.size)
+        assertEquals(
+            listOf("ses_root", "ses_a", "ses_b", "ses_off_cycle"),
+            tree.map { it.session.id },
+        )
+        assertTrue(
+            "promoted entries are childless, so A does not keep C nested",
+            tree.drop(1).all { it.children.isEmpty() },
+        )
+        // The record is not rewritten: C still names A as its parent, only the placement moved.
+        assertEquals("ses_a", tree.last().session.parentID)
+        assertEquals(4, tree.flattenIds().size)
+        assertEquals(
+            setOf("ses_root", "ses_a", "ses_b", "ses_off_cycle"),
+            tree.flattenIds().toSet(),
+        )
     }
 
     // --- the real capture --------------------------------------------------------------------
