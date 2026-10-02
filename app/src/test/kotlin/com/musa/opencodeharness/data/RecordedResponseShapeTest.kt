@@ -1,8 +1,10 @@
 package com.musa.opencodeharness.data
 
 import com.musa.opencodeharness.data.model.Agent
+import com.musa.opencodeharness.data.model.Command
 import com.musa.opencodeharness.data.model.Envelope
 import com.musa.opencodeharness.data.model.Health
+import com.musa.opencodeharness.data.model.Model
 import com.musa.opencodeharness.data.model.SessionInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -122,6 +124,43 @@ class RecordedResponseShapeTest {
         assertTrue(
             "displayName falls back to id and is never blank",
             envelope.data.all { it.displayName == it.id && it.displayName.isNotBlank() },
+        )
+    }
+
+    /**
+     * `command.json` and `model.json` lock the two remaining modelled types that previously had
+     * no recorded evidence. Both are `{location, data}` envelopes like agent.json, and both carry
+     * far more fields per element than we model -- absorbed by `ignoreUnknownKeys`.
+     */
+    @Test
+    fun commandEnvelope_decodesNamesAndOptionalDescriptions() {
+        val envelope = openCodeJson.decodeFromString<Envelope<Command>>(sample("command.json"))
+
+        assertTrue("command.json carries commands", envelope.data.isNotEmpty())
+        assertNull("command.json has no cursor", envelope.cursor)
+        assertTrue("every command has a name", envelope.data.all { it.name.isNotBlank() })
+        // Recorded commands include `/init`, which carries no description key at all.
+        assertTrue(
+            "at least one command omits description, so it must stay nullable",
+            envelope.data.any { it.description == null },
+        )
+        assertTrue(
+            "init is present and described",
+            envelope.data.first { it.name == "init" }.description?.isNotBlank() == true,
+        )
+    }
+
+    @Test
+    fun modelEnvelope_decodesIdNameAndProvider() {
+        val envelope = openCodeJson.decodeFromString<Envelope<Model>>(sample("model.json"))
+
+        assertTrue("model.json carries models", envelope.data.isNotEmpty())
+        assertNull("model.json has no cursor", envelope.cursor)
+        assertTrue("every model has an id", envelope.data.all { it.id.isNotBlank() })
+        assertTrue("every model has a name", envelope.data.all { it.name.isNotBlank() })
+        assertTrue(
+            "every model has a providerID",
+            envelope.data.all { it.providerID.isNotBlank() },
         )
     }
 }

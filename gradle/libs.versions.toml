@@ -32,6 +32,11 @@ ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.r
 ktor-client-content-negotiation = { group = "io.ktor", name = "ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-client-logging = { group = "io.ktor", name = "ktor-client-logging", version.ref = "ktor" }
+# WebSockets are for the PTY endpoint (spec §5.5), NOT for the event stream.
+# /api/event is SSE (`data: {...}` + `: heartbeat` keepalives). SSE support already arrives
+# transitively via this artifact as `io.ktor:ktor-sse`, which carries the `sse { }` client
+# plugin (io.ktor.client.plugins.sse). There is no `ktor-client-sse` coordinate — adding one
+# fails to resolve. So the streaming task needs no new dependency.
 ktor-client-websockets = { group = "io.ktor", name = "ktor-client-websockets", version.ref = "ktor" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }

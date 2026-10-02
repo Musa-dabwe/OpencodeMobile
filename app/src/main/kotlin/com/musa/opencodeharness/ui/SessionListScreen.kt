@@ -168,7 +168,7 @@ private fun SessionRow(session: SessionInfo, depth: Int) {
  *    `SubAgentMarkerTest`, which asserts that number so the two cannot be swapped later.
  *
  * Deliberately a property of the session record rather than of the flattened row, so the rule is
- * one line, has no UI in it, and can be asserted directly. See `SessionListScreenTest`.
+ * one line, has no UI in it, and can be asserted directly. See `SubAgentMarkerTest`.
  */
 internal val SessionInfo.isSubAgentSession: Boolean get() = parentID != null
 
@@ -228,11 +228,11 @@ private fun ConnectedPreview() {
             state = SessionListUiState(
                 connection = ConnectionState.Healthy,
                 roots = listOf(
-                    com.musa.opencodeharness.data.SessionNode(
+                    SessionNode(
                         previewRoot,
                         listOf(
-                            com.musa.opencodeharness.data.SessionNode(previewSubAgent, emptyList()),
-                            com.musa.opencodeharness.data.SessionNode(previewOrphan, emptyList()),
+                            SessionNode(previewSubAgent, emptyList()),
+                            SessionNode(previewOrphan, emptyList()),
                         ),
                     ),
                 ),

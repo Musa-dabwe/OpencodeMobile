@@ -86,3 +86,4 @@ Working invocation: `proot -0 --link2symlink -r <rootfs>` with the env above; `-
 - **There is no children-listing route.** Sub-agent sessions are just `SessionInfo.parentID`; the tree is built client-side by `buildSessionTree`.
 - **A session is a sub-agent iff `parentID != null`** — not iff it has no children. A promoted orphan has a parent *and* no children, so the children-based rule is wrong on real data (holds for 47/50).
 - **Attachments use `uri`, not `path`** (`PromptInput.FileAttachment`); an inline-base64 variant also exists.
+- **`/api/event` is SSE, not a WebSocket.** `ktor-client-websockets` is for the PTY endpoint (spec §5.5). SSE already arrives transitively through it as `io.ktor:ktor-sse`, which carries the `sse { }` client plugin. There is **no `ktor-client-sse` coordinate** — adding one fails to resolve, so the streaming task needs no new dependency.

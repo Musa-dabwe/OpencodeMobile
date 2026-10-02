@@ -110,7 +110,7 @@ fun buildSessionTree(sessions: List<SessionInfo>): List<SessionNode> {
  *
  * Convenience for the UI: expanding a row does not require keeping a parallel id -> node map.
  */
-fun List<SessionNode>.findSessionNode(id: String): SessionNode? {
+internal fun List<SessionNode>.findSessionNode(id: String): SessionNode? {
     for (node in this) {
         if (node.session.id == id) return node
         node.children.findSessionNode(id)?.let { return it }

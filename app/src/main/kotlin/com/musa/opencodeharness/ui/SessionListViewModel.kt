@@ -142,7 +142,7 @@ class SessionListViewModel(
     private fun describe(cause: Throwable): String = when (cause) {
         is ClientRequestException ->
             if (cause.response.status == HttpStatusCode.Unauthorized) {
-                "Server rejected the credentials (HTTP 401). The password is a placeholder in this build."
+                "Server rejected the credentials (HTTP 401)."
             } else {
                 "Server answered with HTTP ${cause.response.status.value}."
             }

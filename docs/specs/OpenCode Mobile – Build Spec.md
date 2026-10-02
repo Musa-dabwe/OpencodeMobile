@@ -108,7 +108,7 @@ with the binary at `node_modules/@opencode/cli-linux-arm64/bin/opencode` after a
 Requirements:
 
 - listen on `127.0.0.1` only, fixed port chosen by the app
-- health check via `GET /api/info` (server identity and readiness)
+- health check via `GET /api/health` → `{"healthy":true}`. **Not `/api/info`** — that route does not exist and falls through to the SPA catch-all, returning `index.html` with `Content-Type: text/html`. Verified on a live server.
 - app restarts it if it dies; service keeps a wake lock while a session is running
 
 ### 3.4 Default config
@@ -127,13 +127,13 @@ Base: `http://127.0.0.1:<port>/api/...`. OpenAPI spec: `https://opencode.ai/v2/o
 
 | Need | Endpoint |
 | --- | --- |
-| health/identity | `GET /api/info` |
+| health/identity | `GET /api/health` (see note above — `/api/info` does not exist) |
 | sessions | `GET/POST /api/session`, `GET/PATCH/DELETE /api/session/{id}` |
 | send message | `POST /api/session/{id}/prompt` (`text`, `files[]`, `agents[]`, `skills[]`) |
 | history (paged) | `GET /api/session/{id}/message` (cursor, `type` filter) |
 | context | `GET /api/session/{id}/context` |
 | stop | `POST /api/session/{id}/interrupt` |
-| child sessions (sub-agents) | session `parentID` / children listing **\[VERIFY\]** route in the OpenAPI spec |
+| child sessions (sub-agents) | **No children-listing route exists.** `Session.Info` carries an optional `parentID`, so the tree is built client-side by grouping `GET /api/session` on it. Verified on a live server (50 sessions, 34 with a parent) |
 | fork / compact | `POST .../fork`, `POST .../compact` |
 | slash commands | `GET /api/command`, `POST .../command` |
 | shell in session | `POST /api/session/{id}/shell` |
@@ -281,7 +281,7 @@ Detect media in three places: (a) user attachments, (b) markdown image/link synt
 
 ### 6.4 Attachments in prompts
 
-Use `files[]` in the prompt body. **\[VERIFY\]** the `PromptInput.FileAttachment` shape in the OpenAPI schema (path vs inline base64 and mime). Copy picked Android content URIs into `workspace/.attachments/` first, then reference by path.
+Use `files[]` in the prompt body. Two shapes exist, both confirmed from the v2 OpenAPI schema: `PromptInput.FileAttachment` requires **`uri`** (not `path`), plus optional `name`/`description`/`mention`; a separate `Prompt.FileAttachment` takes inline `data` (base64) + `mime` + `source`. Copy picked Android content URIs into `workspace/.attachments/` first, then reference them.
 
 ---
 
@@ -335,7 +335,7 @@ Implementation:
 
 1. Launch proot + Alpine from a bare Compose app; `apk add` works; DNS works.
 2. Install OpenCode v2 via 3.2; capture the working command, version, binary name.
-3. Start the server headless; `curl /api/info` from the app; confirm auth flag.
+3. Start the server headless; `curl /api/health` from the app; confirm auth flag.
 4. Connect a provider with a key via the API; send a prompt; watch the SSE stream; dump real event and message JSON samples into `docs/samples/`.
 5. Extract the `opencode` theme tokens.
 6. Test PTY WebSocket from the app.
