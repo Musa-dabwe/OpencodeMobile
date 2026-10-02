@@ -5,8 +5,12 @@ import com.musa.opencodeharness.data.model.SessionInfo
 /**
  * One session and its direct sub-agent children, recursively.
  *
- * [children] is empty for a session with no sub-agents -- which is also the "is this a sub-agent
- * of something" marker the UI needs, so no extra flag is carried.
+ * [children] is empty for a session with no sub-agents. It is NOT an "is this a sub-agent of
+ * something" marker -- it answers the opposite direction of the question, and on the recorded
+ * 50-session capture it is empty for 47 of 50 sessions, so a UI that read it as the sub-agent
+ * flag would mark every childless root as a sub-agent and the 3 real parents as not. The UI asks
+ * [SessionInfo.parentID] instead; see `isSubAgentSession` in the ui package and
+ * `SubAgentMarkerTest`, which pins the two apart.
  */
 data class SessionNode(
     val session: SessionInfo,
