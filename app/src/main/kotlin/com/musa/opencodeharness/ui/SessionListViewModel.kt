@@ -5,13 +5,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.musa.opencodeharness.data.OpenCodeApi
 import com.musa.opencodeharness.data.OpenCodeClient
 import com.musa.opencodeharness.data.ServerEndpoint
 import com.musa.opencodeharness.data.SessionNode
 import com.musa.opencodeharness.data.buildSessionTree
-import io.ktor.client.plugins.ClientRequestException
-import io.ktor.http.HttpStatusCode
+import com.musa.opencodeharness.data.ApiException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,29 +62,27 @@ data class SessionListUiState(
 /**
  * Drives the one screen in this slice: connect, read the session list, group it into a tree.
  *
- * No dependency-injection framework is wired up (and none is needed yet), so the [OpenCodeClient]
- * is built here from a [ServerEndpoint] supplied by [factory] and torn down in [onCleared].
+ * No dependency-injection framework is wired up (and none is needed yet), so the real
+ * [OpenCodeClient] is built by [factory] from a [ServerEndpoint] and handed to this ViewModel
+ * already constructed. [load] launches on `scope ?: viewModelScope` -- tests pass their own
+ * scope, production passes none and gets `viewModelScope`.
  *
- * The client is created ONCE per ViewModel instance on purpose:
- * [OpenCodeClient] is [AutoCloseable] and owns an OkHttp engine, so building one per load or per
- * recomposition would leak an engine's thread pool and connection pool. One ViewModel -> one
- * client -> one `close()`.
+ * Lifecycle: the interface this ViewModel holds ([OpenCodeApi]) deliberately does NOT extend
+ * [AutoCloseable] -- fakes have nothing to close. The real client's ownership arrives as the
+ * separate [closeable] parameter (null in tests, the same [OpenCodeClient] instance in
+ * production), so the ViewModel releases the OkHttp engine exactly once in [onCleared] and
+ * never calls `close()` on something (a fake) that did not need it. Exactly once because
+ * [ViewModel.onCleared] runs exactly once per instance, and the ViewModel owns the closeable
+ * outright -- nothing else closes it.
  */
 class SessionListViewModel(
-    endpoint: ServerEndpoint,
+    private val api: OpenCodeApi,
+    private val closeable: AutoCloseable? = null,
+    private val scope: CoroutineScope? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SessionListUiState())
     val state: StateFlow<SessionListUiState> = _state.asStateFlow()
-
-    /**
-     * Deliberately a `val` created at construction, not a `fun get() = OpenCodeClient(...)`.
-     * See the class KDoc for why.
-     */
-    private val client: OpenCodeClient = OpenCodeClient(
-        baseUrl = endpoint.baseUrl,
-        password = endpoint.password,
-    )
 
     init {
         load()
@@ -92,9 +91,9 @@ class SessionListViewModel(
     /** Re-runs health + session load. Wired to the retry action on the unreachable state. */
     fun load() {
         _state.value = SessionListUiState(connection = ConnectionState.Connecting)
-        viewModelScope.launch {
+        (scope ?: viewModelScope).launch {
             val health = try {
-                client.health()
+                api.health()
             } catch (cancellation: CancellationException) {
                 // Never swallow cancellation: the coroutine is being torn down (onCleared, or the
                 // ViewModel scope is cancelled) and must unwind normally. Catching Throwable
@@ -113,7 +112,7 @@ class SessionListViewModel(
             }
 
             val sessions = try {
-                client.listSessions()
+                api.listSessions()
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (cause: Throwable) {
@@ -137,24 +136,26 @@ class SessionListViewModel(
 
     /**
      * Maps a transport failure to one honest sentence. Nothing here reads a response body, logs,
-     * or interpolates the endpoint or the password -- only the HTTP status or the exception type.
+     * or interpolates the endpoint or the password -- only the app-level exception type.
+     *
+     * The Ktor types were deliberately mapped to [ApiException] inside the client, so this file
+     * imports no HTTP-library types at all and every branch here is reachable from a plain fake.
      */
     private fun describe(cause: Throwable): String = when (cause) {
-        is ClientRequestException ->
-            if (cause.response.status == HttpStatusCode.Unauthorized) {
-                "Server rejected the credentials (HTTP 401)."
-            } else {
-                "Server answered with HTTP ${cause.response.status.value}."
-            }
-        // OkHttp surfaces connection refusal/timeouts/DNS as its own exception types, so the
-        // simple name is the useful part; it carries no address and no secret.
+        is ApiException.Unauthorized -> "Server rejected the credentials (HTTP 401)."
+        is ApiException.ServerError -> "Server answered with HTTP ${cause.status}."
+        is ApiException.Unreachable ->
+            // The underlying cause carries the useful part -- OkHttp surfaces connection refusal,
+            // timeouts and DNS as distinct exception types. Only the simple name is used, which
+            // holds no address and no secret.
+            "Could not reach the server (${cause.cause?.javaClass?.simpleName ?: "unknown error"})."
         else -> "Could not reach the server (${cause::class.simpleName ?: "unknown error"})."
     }
 
     override fun onCleared() {
         // ViewModel.onCleared runs when the Activity is finishing for good, not on rotation, so
-        // this is the right single place to release the OkHttp engine.
-        client.close()
+        // this is the right single place to release the OkHttp engine. Null for a fake.
+        closeable?.close()
         super.onCleared()
     }
 
@@ -167,7 +168,18 @@ class SessionListViewModel(
          */
         fun factory(endpoint: ServerEndpoint = ServerEndpoint.PLACEHOLDER): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { SessionListViewModel(endpoint) }
+                initializer {
+                    // The real client is constructed HERE, from the injected endpoint, and
+                    // handed to the ViewModel already built -- the ViewModel never sees the
+                    // endpoint constant and never constructs its own dependency. The same
+                    // instance arrives twice: once as the [OpenCodeApi] it calls, once as the
+                    // [AutoCloseable] it owns for exactly one close in onCleared.
+                    val client = OpenCodeClient(
+                        baseUrl = endpoint.baseUrl,
+                        password = endpoint.password,
+                    )
+                    SessionListViewModel(api = client, closeable = client)
+                }
             }
     }
 }
