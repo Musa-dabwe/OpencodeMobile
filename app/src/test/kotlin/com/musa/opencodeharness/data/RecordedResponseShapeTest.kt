@@ -24,7 +24,7 @@ import org.junit.Test
 class RecordedResponseShapeTest {
 
     private fun sample(name: String): String =
-        checkNotNull(javaClass.classLoader!!.getResourceAsStream(name)) {
+        checkNotNull(javaClass.classLoader?.getResourceAsStream(name)) {
             "Missing recorded sample $name on the test classpath"
         }.bufferedReader().use { it.readText() }
 
@@ -40,9 +40,11 @@ class RecordedResponseShapeTest {
         val envelope = sessions()
 
         assertEquals(50, envelope.data.size)
-        val cursor = requireNotNull(envelope.cursor) { "session.json carries a cursor" }
-        assertNotNull("recorded session.json carries a cursor.previous", cursor.previous)
-        assertNotNull("recorded session.json carries a cursor.next", cursor.next)
+        // assertNotNull rather than requireNotNull: requireNotNull throws, which Gradle reports
+        // as an error rather than a failure and breaks this file's assertion idiom.
+        assertNotNull("recorded session.json carries a cursor", envelope.cursor)
+        assertNotNull("recorded session.json carries a cursor.previous", envelope.cursor?.previous)
+        assertNotNull("recorded session.json carries a cursor.next", envelope.cursor?.next)
         // session.json has no sibling `location` key -- only agent.json does.
         assertNull(envelope.location)
     }
@@ -50,6 +52,11 @@ class RecordedResponseShapeTest {
     /**
      * The sub-agent grouping invariant (Task 4): a root session omits `parentID` entirely and
      * must decode to null rather than throwing MissingFieldException.
+     *
+     * `assertEquals(16, ...)` is the load-bearing line. 16 of the 50 recorded sessions have NO
+     * `parentID` key at all; the other 34 have it. The `all {}` assertions below are vacuous on
+     * an empty set, so without the count this test would pass even against a model that
+     * defaulted the field to `""` instead of null. Keep the count when re-recapturing.
      */
     @Test
     fun session_withoutParentId_decodesWithNullParent() {
@@ -62,6 +69,10 @@ class RecordedResponseShapeTest {
             "recorded session location has a directory and no project",
             roots.all { it.location?.directory?.isNotBlank() == true && it.location.project == null },
         )
+        // A named session verified to have no `parentID` key, so the absent-field claim is
+        // legible directly rather than inferred from the count above.
+        val root = sessions().data.first { it.id == "ses_f4a637ae1ffewUvbHzzhYgQZ30" }
+        assertNull("recorded root session has no parentID key", root.parentID)
     }
 
     @Test
@@ -78,7 +89,13 @@ class RecordedResponseShapeTest {
         // Verbatim from the capture: this sub-agent session hangs off a root session.
         val child = children.first { it.id == "ses_f4a43dfc4ffeWLCJ8Ey0VJZqHq" }
         assertEquals("ses_f4a637ae1ffewUvbHzzhYgQZ30", child.parentID)
-        assertEquals(3, children.mapTo(mutableSetOf()) { it.parentID }.size)
+        // Distinct parents: only assert it is non-empty. Pinning the exact number couples the
+        // test to a fixture detail with no schema meaning, and is the first thing to break on a
+        // re-capture with a confusing message.
+        assertTrue(
+            "children hang off at least one distinct parent",
+            children.mapTo(mutableSetOf()) { it.parentID }.isNotEmpty(),
+        )
     }
 
     @Test
