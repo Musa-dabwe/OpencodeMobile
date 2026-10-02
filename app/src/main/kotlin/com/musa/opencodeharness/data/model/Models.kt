@@ -19,11 +19,20 @@ data class Envelope<T>(
     val cursor: Cursor? = null,
 )
 
-/** The `location` key alongside `data`. Carries the directory the list was scoped to. */
+/**
+ * The `location` key. It appears in two shapes, and the same type has to decode both:
+ *
+ *  - envelope level, e.g. `docs/samples/agent.json`:
+ *    `{"directory":"/tmp/opencode","project":{"id":"global","directory":"/"}}`
+ *  - a session's own location, e.g. `docs/samples/session.json` (50/50 sessions):
+ *    `{"directory":"/home/musa/Projects/Wordwise"}` -- no `project` at all
+ *
+ * So `project` is optional; requiring it threw `MissingFieldException` on the session list.
+ */
 @Serializable
 data class Location(
     val directory: String,
-    val project: ProjectRef,
+    val project: ProjectRef? = null,
 )
 
 @Serializable
@@ -62,15 +71,51 @@ data class SessionInfo(
      */
     val parentID: String? = null,
     val projectID: String? = null,
+    /** Its own location; see [Location] for why `project` is absent here. */
+    val location: Location? = null,
+    val time: SessionTime? = null,
 )
 
-/** One element of `GET /api/agent`. */
+/**
+ * Session timestamps. Present on 50/50 sessions in `docs/samples/session.json` as
+ * `{"created":<epoch millis>,"updated":<epoch millis>}` (e.g. 1789755400251). Both fields
+ * are nullable so a partial payload degrades instead of throwing.
+ */
+@Serializable
+data class SessionTime(
+    val created: Long? = null,
+    val updated: Long? = null,
+)
+
+/**
+ * One element of `GET /api/agent`.
+ *
+ * NOTE: the live payload in `docs/samples/agent.json` carries `id`, `request`, `system`,
+ * `description`, `mode`, `hidden`, `permissions` -- and NO `name` key on any of its 32
+ * agents. `name` is therefore optional here; it is a v2-schema field only.
+ */
 @Serializable
 data class Agent(
     val id: String,
-    val name: String,
     val description: String? = null,
-)
+    /**
+     * Present on 32/32 agents in `docs/samples/agent.json`, with exactly two observed
+     * values: `"primary"` and `"subagent"`. This is what distinguishes the main agents from
+     * sub-agents (spec section 5.9).
+     *
+     * A nullable `String`, NOT an enum: an enum that meets a third value crashes on decode,
+     * whereas a String can be compared literally and defaulted by the caller.
+     */
+    val mode: String? = null,
+    val name: String? = null,
+) {
+    /**
+     * What to show in the UI. `name` is absent from the live payload, so `id` is the
+     * fallback -- it is present on 32/32 agents. An empty-string default would render every
+     * real agent as a blank label.
+     */
+    val displayName: String get() = name ?: id
+}
 
 /**
  * One element of `GET /api/model`.
