@@ -16,6 +16,56 @@ Location: `~/storage/shared/Build/ocmobile-artifacts/`
 
 SHA-256 checksums are in `SHA256SUMS.txt` in the same directory.
 
+## Running OpenCode v2 on the device — required extras
+
+**The v2 binary is Bun, not Node.js.** Spec §3.2 says "OpenCode v2 replaced Bun with Node.js". That
+is wrong. A crash report from the running binary states plainly:
+
+```
+Bun v1.4.2 (744846f84) Linux arm64
+Linux Kernel v4.19.157 | musl
+Args: "/usr/local/bin/opencode" "--smol" "--user-agent=opencode/latest/2.0.22/cli" "--use-system-ca" ...
+```
+
+`--smol` means it is a Bun standalone executable. Consequence: no Node.js, and no npm fallback
+chain — the npm package *is* the Bun binary.
+
+Three things the minirootfs does not provide, all required:
+
+1. **`libstdc++.so.6`** — without it: `Error relocating ...: symbol not found` on the C++ RTTI
+   symbols. From `libstdc++-14.2.0-r4.apk`, install the `.so` into `<rootfs>/usr/lib/`.
+2. **`libgcc_s.so.1`** — without it, `libstdc++.so.6` itself fails to load on the unwinder symbols
+   (`__unordtf2`, `_Unwind_Resume`, `_Unwind_SetIP`). From `libgcc-14.2.0-r4.apk`.
+3. **`/dev` must be bind-mounted.** This is the one that is easy to miss. The minirootfs ships an
+   empty `dev/`, and without `-b /dev` the binary loads, starts, and then dies with
+   `panic(main thread): abort() called` after ~160 ms. Binding `/dev` (and `/proc`, `/sys`) makes it
+   work. Bun needs `/dev/shm`.
+
+**`-b` binds are NOT optional for the OpenCode binary.** Earlier notes in this repo said binds were
+"not needed" — that was true for a busybox shell and false for Bun. Correct invocation:
+
+```
+proot -0 --link2symlink -r <rootfs> -b /dev -b /proc -b /sys /usr/local/bin/opencode serve --hostname 127.0.0.1 --port <port>
+```
+
+with `TMPDIR`, `LD_LIBRARY_PATH`, `PROOT_LOADER`, `HOME=/root` and `PATH` set as before.
+
+Also worth extracting: `ca-certificates-bundle` provides `/etc/ssl/certs/ca-certificates.crt`,
+which the binary needs because it passes `--use-system-ca`. Without it TLS to model providers fails.
+
+### Verified working on device
+
+```
+$ proot ... /usr/local/bin/opencode --version
+opencode v2.0.22
+
+$ proot ... /usr/local/bin/opencode serve --hostname 127.0.0.1 --port 45997
+server listening on http://127.0.0.1:45997
+```
+
+And the listener is real — `/proc/net/tcp` shows `0100007F:B3AD` in state `0A` (LISTEN), i.e.
+127.0.0.1:45997.
+
 ## The OpenCode binary
 
 | Field | Value |

@@ -66,6 +66,8 @@ Persist OpenCode's config/data dirs outside the rootfs so rootfs reinstalls neve
 
 Flags: `-0 --link2symlink --kill-on-exit -r <rootfs>`, bind `/dev /proc /sys`, workspace, data dirs, and `/sdcard` (for storage access). Set `HOME=/root`, `TMPDIR=/tmp`, PATH. Use `ProcessBuilder` from the service. Redirect output to a log file the UI can tail.
 
+**The `/dev` bind is load-bearing, not decorative.** The minirootfs ships an empty `dev/`, and without `-b /dev` the OpenCode binary loads, starts, and then aborts (`panic: abort() called`) after ~160 ms. Verified on device: adding `-b /dev -b /proc -b /sys` makes `opencode --version` and `opencode serve` work. The rootfs also needs `libstdc++.so.6`, `libgcc_s.so.1` and a CA bundle copied in — see `docs/runtime-artifacts.md`.
+
 ---
 
 ## 3. Runtime: Alpine + OpenCode v2
@@ -83,7 +85,7 @@ Flags: `-0 --link2symlink --kill-on-exit -r <rootfs>`, bind `/dev /proc /sys`, w
 
 Findings:
 
-- OpenCode v2 replaced Bun with Node.js and has a new server API. Install docs list **standalone Linux musl ARM64** binaries, plus npm `@opencode/cli` (beta channel was `@opencode-ai/cli@next`).
+- ~~OpenCode v2 replaced Bun with Node.js~~ **Wrong — verified on device.** v2.0.22 is a **Bun 1.4.2 standalone executable** (`--smol`), as its own crash banner reports. There is no Node.js dependency and no npm install step. It does have a new server API. Install docs list **standalone Linux musl ARM64** binaries, plus npm `@opencode/cli` (beta channel was `@opencode-ai/cli@next`).
 - v1 had an Alpine/musl bug in its npm wrapper (binary variant not detected). v2 status unknown.
 - A community Termux project reports v2 fails natively on Termux (DNS via c-ares raw UDP) but works inside proot Ubuntu. That is our situation, but with Alpine/musl.
 

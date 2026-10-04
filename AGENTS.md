@@ -66,7 +66,24 @@ All verified on a real OPPO Reno 3 (PCLM50), Android 12 / SDK 31, arm64-v8a. `do
 - **Clear `lib/apk/db/lock` on resume.** An interrupted `apk` run leaves a lock and every later run fails with `Unable to lock database`. This is the concrete failure behind the spec's "resumable after process death" requirement.
 - **Network diagnostics must run in the app's own process, never via `adb shell run-as`.** `run-as` sits in a different SELinux domain without the `inet` group, so every socket reports `Operation not permitted` while the app itself has full network. This is what spec §3.5's Diagnostics screen has to get right.
 
-Working invocation: `proot -0 --link2symlink -r <rootfs>` with the env above; `-b` binds were not needed.
+Working invocation: `proot -0 --link2symlink -r <rootfs> -b /dev -b /proc -b /sys` with the env above.
+**The `-b` binds are mandatory for the OpenCode binary** — the minirootfs ships an empty `dev/`, and
+without them Bun loads, starts, then aborts after ~160 ms. (Binds genuinely were unnecessary for a
+busybox shell, which is how the earlier, wrong conclusion was reached.)
+
+### Extra files the minirootfs does not provide
+
+OpenCode v2 is a **Bun** standalone executable (`--smol`), not Node.js — spec §3.2's "replaced Bun
+with Node.js" is wrong. It needs, all copied into `<rootfs>/usr/lib/`:
+
+- `libstdc++.so.6` from `libstdc++-14.2.0-r4.apk` — else `Error relocating ...: symbol not found`
+- `libgcc_s.so.1` from `libgcc-14.2.0-r4.apk` — else `libstdc++.so.6` fails on `_Unwind_*` symbols
+- `/etc/ssl/certs/ca-certificates.crt` from `ca-certificates-bundle` — the binary passes
+  `--use-system-ca`, so provider TLS fails without it
+
+`apk add` for these is unreliable on device (flaky index, and the dependency solver wants a working
+index even for a local `.apk`). Extracting the `.so` straight out of the `.apk` tarball and copying
+it into the rootfs works and needs no index. See `docs/runtime-artifacts.md`.
 
 ## Runtime invariants worth not breaking
 
