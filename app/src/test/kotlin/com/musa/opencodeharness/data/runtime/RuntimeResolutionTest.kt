@@ -1,5 +1,7 @@
 package com.musa.opencodeharness.data.runtime
 
+import com.musa.opencodeharness.data.runtime.UnpackMode
+import com.musa.opencodeharness.data.runtime.embeddedRuntimeManifest
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -254,5 +256,44 @@ class RuntimeResolutionTest {
         assertFalse(isBelowVersion("2.0.0", "2.0.0"))
         assertFalse(isBelowVersion("2.0.22", "2.0.0"))
         assertFalse(isBelowVersion("3.0.0", "2.0.0"))
+    }
+
+    /**
+     * Guards the install contract Task 3 depends on.
+     *
+     * `payloads` is deliberately empty for the npm artifact because its per-member sizes drift
+     * every release. That must NOT leave Task 3 with no structured record of what to extract —
+     * so every artifact carries `installMembers`, and the rootfs is marked UNPACK_TREE so it is
+     * never mistaken for a container to lift members out of.
+     */
+    @Test
+    fun `every artifact states how to install it, npm included`() {
+        val installable = embeddedRuntimeManifest.artifacts.filter { it.unpackMode == UnpackMode.LIFT_MEMBERS }
+
+        assertTrue("expected the member-lifting artifacts", installable.isNotEmpty())
+        assertTrue(
+            "a LIFT_MEMBERS artifact lists nothing to install: " +
+                installable.filter { it.installMembers.isEmpty() }.map { it.id },
+            installable.all { it.installMembers.isNotEmpty() },
+        )
+        assertTrue(
+            "every install member names both a source path and an install name",
+            installable.all { a -> a.installMembers.all { it.memberPath.isNotBlank() && it.installAs.isNotBlank() } },
+        )
+
+        // The npm artifact specifically: payloads empty by policy, but installMembers present.
+        val opencode = embeddedRuntimeManifest.artifact("opencode-cli")
+        assertTrue("npm payload list stays empty by policy", opencode.payloads.isEmpty())
+        assertEquals(
+            "the opencode binary must still be a declared install member",
+            listOf("package/bin/opencode"),
+            opencode.installMembers.map { it.memberPath },
+        )
+        assertEquals("opencode", opencode.installMembers.single().installAs)
+
+        // The rootfs is unpacked whole, not lifted from.
+        val rootfs = embeddedRuntimeManifest.artifact("alpine-rootfs")
+        assertEquals(UnpackMode.UNPACK_TREE, rootfs.unpackMode)
+        assertTrue("an UNPACK_TREE artifact needs no member list", rootfs.installMembers.isEmpty())
     }
 }

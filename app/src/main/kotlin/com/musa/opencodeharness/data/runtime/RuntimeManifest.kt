@@ -58,11 +58,58 @@ data class Artifact(
      * SUM OF ALL extracted member sizes against `ResolvedArtifact.unpackedSize`. Never sum
      * `payloads[].sizeBytes` for an npm artifact — the list being empty makes that attempt
      * a guaranteed-visible mismatch rather than a silent wrong comparison.
+     *
+     * [installMembers] is what tells Task 3 WHICH members to lift, and is set for every artifact
+     * including npm ones. It is separate from [payloads] on purpose: `payloads` carries
+     * per-member expectations that drift on every upstream release (hence empty for npm), while
+     * the member PATHS are stable. Empty [payloads] therefore means "no per-member expectations",
+     * never "nothing to extract".
      */
     val payloads: List<Payload> = emptyList(),
+    /**
+     * How Task 3 consumes this container. The two are genuinely different operations: the Alpine
+     * minirootfs is an operating system image unpacked whole into `filesDir/runtime/rootfs`,
+     * while every other artifact is a container we lift a named member or two out of. Do not let
+     * this be inferred from an empty [installMembers] — an empty list means "lift nothing", not
+     * "unpack everything".
+     */
+    val unpackMode: UnpackMode = UnpackMode.LIFT_MEMBERS,
+    /**
+     * Archive member paths Task 3 lifts, each installed under the given file name.
+     *
+     * Present for every artifact, npm included — an empty [payloads] must never be read as
+     * "nothing to extract". Paths and install names are stable across upstream releases; only
+     * the per-member sizes and hashes in [payloads] drift, which is why they are separate.
+     */
+    val installMembers: List<InstallMember> = emptyList(),
     /** Freeform prose about the artifact; not consumed programmatically. */
     val note: String = "",
 )
+
+/**
+ * One file to lift out of a container, and the name to install it under.
+ *
+ * Carries no size or hash: those live in [Payload] and are intentionally absent for npm
+ * artifacts, whose members change every release. This type is only "where it is and what to
+ * call it", which does not drift.
+ */
+@Serializable
+data class InstallMember(
+    /** Path of the member inside the container archive, e.g. `package/bin/opencode`. */
+    val memberPath: String,
+    /** File name Task 3 installs under, e.g. `opencode`. */
+    val installAs: String,
+)
+
+/** How an artifact's container is turned into installed files. */
+@Serializable
+enum class UnpackMode {
+    /** Unpack the whole archive as a directory tree — the Alpine minirootfs. */
+    UNPACK_TREE,
+
+    /** Lift only the members named in [Artifact.installMembers]. */
+    LIFT_MEMBERS,
+}
 
 /**
  * A file to be extracted out of a container artifact (`.tgz`/`.deb`/`.apk`). Structured so
@@ -131,8 +178,12 @@ val embeddedRuntimeManifest = RuntimeManifest(
             // not just `package/bin/opencode`. Listing a single member here would invite
             // the failing comparison 199,167,184 != 199,167,429. For npm artifacts the
             // extraction check is: the SUM of the sizes of ALL extracted members ==
-            // ResolvedArtifact.unpackedSize. Member to lift: package/bin/opencode.
+            // ResolvedArtifact.unpackedSize.
             payloads = emptyList(),
+            // Which member to lift still lives in structured data, not just the comment above.
+            installMembers = listOf(
+                InstallMember(memberPath = "package/bin/opencode", installAs = "opencode"),
+            ),
             note = "The OpenCode v2 server binary; URL and integrity resolve from npm at download time.",
         ),
         Artifact(
@@ -148,6 +199,7 @@ val embeddedRuntimeManifest = RuntimeManifest(
 
             ),
             payloads = emptyList(),
+            unpackMode = UnpackMode.UNPACK_TREE,
             note = "Alpine 3.21.3 aarch64 minirootfs; unpacked as-is into filesDir/runtime/rootfs.",
         ),
         Artifact(
@@ -168,6 +220,10 @@ val embeddedRuntimeManifest = RuntimeManifest(
                 Payload("proot-loader", "libexec/proot/loader", 18_136,
                     "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551"),
             ),
+            installMembers = listOf(
+                InstallMember(memberPath = "bin/proot", installAs = "proot"),
+                InstallMember(memberPath = "libexec/proot/loader", installAs = "proot-loader"),
+            ),
             note = "Termux .deb; the entry's hash verifies the .deb container, payload hashes " +
                 "verify the extracted members.",
         ),
@@ -187,6 +243,9 @@ val embeddedRuntimeManifest = RuntimeManifest(
                 Payload("libtalloc.so.2", "lib/aarch64-linux-android/libtalloc.so.2", 33_592,
                     "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309"),
             ),
+            installMembers = listOf(
+                InstallMember(memberPath = "lib/aarch64-linux-android/libtalloc.so.2", installAs = "libtalloc.so.2"),
+            ),
             note = "Termux .deb; proot link dependency.",
         ),
         Artifact(
@@ -204,6 +263,9 @@ val embeddedRuntimeManifest = RuntimeManifest(
             payloads = listOf(
                 Payload("libandroid-shmem.so", "lib/aarch64-linux-android/libandroid-shmem.so", 14_432,
                     "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731"),
+            ),
+            installMembers = listOf(
+                InstallMember(memberPath = "lib/aarch64-linux-android/libandroid-shmem.so", installAs = "libandroid-shmem.so"),
             ),
             note = "Termux .deb; proot link dependency.",
         ),
@@ -223,6 +285,9 @@ val embeddedRuntimeManifest = RuntimeManifest(
                 Payload("libstdc++.so.6", "usr/lib/libstdc++.so.6.0.33", 2_754_992,
                     "1f1a71be4319632f743507ef7c6eaebaccad8d6f277055cf2c6b16b544f9f418"),
             ),
+            installMembers = listOf(
+                InstallMember(memberPath = "usr/lib/libstdc++.so.6.0.33", installAs = "libstdc++.so.6"),
+            ),
             note = "Alpine .apk; the download unit is the package, not the .so member.",
         ),
         Artifact(
@@ -241,6 +306,9 @@ val embeddedRuntimeManifest = RuntimeManifest(
                 Payload("libgcc_s.so.1", "usr/lib/libgcc_s.so.1", 133_008,
                     "69c45f16064b7b61b9a3d64c37395d13368a8fe719745d49e9508ec650fea971"),
             ),
+            installMembers = listOf(
+                InstallMember(memberPath = "usr/lib/libgcc_s.so.1", installAs = "libgcc_s.so.1"),
+            ),
             note = "Alpine .apk; the download unit is the package, not the .so member.",
         ),
         Artifact(
@@ -258,6 +326,9 @@ val embeddedRuntimeManifest = RuntimeManifest(
             payloads = listOf(
                 Payload("ca-certificates.crt", "etc/ssl/certs/ca-certificates.crt", 181_724,
                     "028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232"),
+            ),
+            installMembers = listOf(
+                InstallMember(memberPath = "etc/ssl/certs/ca-certificates.crt", installAs = "ca-certificates.crt"),
             ),
             note = "Alpine .apk; the download unit is the package, not the .crt member.",
         ),
