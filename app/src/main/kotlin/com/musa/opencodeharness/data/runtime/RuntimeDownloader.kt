@@ -94,21 +94,20 @@ class RuntimeDownloader(
     /**
      * True only when a fully-verified artifact is on disk for the current manifest entry.
      *
-     * Deliberate decision: we trust the `.trusted` marker and do NOT re-hash the destination
-     * on every check. Re-hashing the 88 MB opencode artifact on every launch is expensive,
-     * and the marker is written only after a successful hash check. Consequence: corruption
-     * of the destination that happens *after* verification (disk rot, manual tampering) is
-     * NOT re-detected on later runs. Callers that need a fresh guarantee may delete the
-     * marker to force re-verification.
-     */
-    /**
-     * "A verified artifact exists for this entry as of the last successful check" — and
-     * nothing more. For pinned artifacts that also implies "up to date" (the pin cannot
-     * change under a running app). For npm artifacts it does NOT: npm's published integrity
-     * may have advanced since the marker was written, and this overload deliberately does
-     * not hit the network to find out. If you need "is this npm's latest?", use
-     * [ensure] (or resolve + [isComplete(ResolvedArtifact)][isComplete]) — blind trust means
+     * What it proves: "a verified artifact exists for this entry as of the last successful
+     * check" — and nothing more. For pinned artifacts that also implies "up to date" (the pin
+     * cannot change under a running app). For npm artifacts it does NOT: npm's published
+     * integrity may have advanced since the marker was written, and this overload deliberately
+     * does not hit the network to find out. If you need "is this npm's latest?", use [ensure]
+     * (or resolve + the [isComplete] overload taking a [ResolvedArtifact]) — blind trust means
      * accepting whatever npm published at resolve time, never claiming freshness offline.
+     *
+     * Deliberate decision: we trust the `.trusted` marker and do NOT re-hash the destination on
+     * every check. Re-hashing the 88 MB opencode artifact on every launch is expensive, and the
+     * marker is written only after a successful hash check. Consequence: corruption of the
+     * destination that happens *after* verification (disk rot, manual tampering) is NOT
+     * re-detected on later runs. Callers that need a fresh guarantee may delete the marker to
+     * force re-verification.
      */
     fun isComplete(artifact: Artifact): Boolean {
         // Pinned artifacts can be checked locally; npm artifacts must resolve first (their

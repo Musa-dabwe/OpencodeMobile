@@ -58,10 +58,12 @@ class RuntimeResolutionTest {
         override suspend fun stream(url: String, offset: Long, sink: OutputStream): Boolean {
             calls++
             lastUrl = url
-            sink.write(body, offset.toInt(), body.size - offset.toInt())
+            // Contract: true iff offset > 0 AND the server honored the Range header; false
+            // means the bytes written start at byte 0. This fake only ever serves whole-body
+            // requests, so it writes from byte 0 and reports false — honouring `offset` here
+            // would contradict the return value. Tests here only pass offset 0.
+            sink.write(body)
             sink.flush()
-            // Contract: true iff offset > 0 and honored; false means the written bytes
-            // started at byte 0, which is exactly what this fake always writes.
             return false
         }
     }
@@ -98,7 +100,7 @@ class RuntimeResolutionTest {
         assertArrayEquals(body, dest.readBytes())
         assertEquals(expectedSri, downloader.trustedMarker(npmArtifact).readText().trim())
         assertTrue("marker-matching file must verify against npm's published SRI", Sha512SriDigest(expectedSri).matches(dest))
-        // Resolution must have produced exactly the registry values used for fetch+verify.
+        // Resolution must have handed the downloader exactly the tarball URL npm published.
         assertEquals(expectedUrl, fetcher.lastUrl)
     }
 
