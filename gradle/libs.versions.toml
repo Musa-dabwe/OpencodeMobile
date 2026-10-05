@@ -41,3 +41,5 @@ ktor-client-websockets = { group = "io.ktor", name = "ktor-client-websockets", v
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version = "1.26.2" }
+xz = { group = "org.tukaani", name = "xz", version = "1.10" }

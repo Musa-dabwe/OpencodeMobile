@@ -62,6 +62,8 @@ dependencies {
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.client.websockets)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.commons.compress)
+    implementation(libs.xz)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
