@@ -13,6 +13,12 @@ data class NpmResolution(
     val url: String,
     /** SRI string exactly as published, e.g. `sha512-<base64>`. */
     val integrity: String,
+    /**
+     * npm's published total size of ALL members extracted from this tarball
+     * (package.json + bin/opencode, etc.). Task 3 compares the SUM of extracted member
+     * sizes against this — comparing a single member to it is wrong by construction.
+     */
+    val unpackedSize: Long? = null,
 )
 
 /** Resolution failed, or the resolved version violates the declared floor. */
@@ -34,6 +40,8 @@ data class ResolvedArtifact(
     val digest: ExpectedDigest,
     /** Opaque token written to the `.trusted` marker after verification. */
     val markerToken: String,
+    /** npm's published total extraction size; null for pinned artifacts. Task 3's size check. */
+    val unpackedSize: Long? = null,
 )
 
 /**
@@ -125,6 +133,7 @@ suspend fun resolveArtifact(artifact: Artifact, resolver: NpmArtifactResolver?):
                 sizeBytes = null,
                 digest = Sha512SriDigest(resolution.integrity),
                 markerToken = resolution.integrity,
+                unpackedSize = resolution.unpackedSize,
             )
         }
     }
@@ -145,8 +154,14 @@ internal fun parseUpdateEndpointVersion(text: String): String =
     Json.parseToJsonElement(text).jsonObject["version"]?.jsonPrimitive?.content
         ?: throw ResolutionException("update endpoint document has no 'version'")
 
-/** Extracts `dist.tarball` and `dist.integrity` from a registry version document. */
-internal fun parseRegistryVersionDoc(text: String): Pair<String, String> {
+/** Extracts `dist.tarball`, `dist.integrity`, and `dist.unpackedSize` from a registry document. */
+internal data class RegistryVersionDoc(
+    val tarball: String,
+    val integrity: String,
+    val unpackedSize: Long?,
+)
+
+internal fun parseRegistryVersionDoc(text: String): RegistryVersionDoc {
     val dist = Json.parseToJsonElement(text).jsonObject["dist"]?.jsonObject
         ?: throw ResolutionException("registry document has no 'dist'")
     val tarball = dist["tarball"]?.jsonPrimitive?.content
@@ -154,7 +169,7 @@ internal fun parseRegistryVersionDoc(text: String): Pair<String, String> {
     if (tarball == null || integrity == null) {
         throw ResolutionException("registry 'dist' missing 'tarball' or 'integrity'")
     }
-    return tarball to integrity
+    return RegistryVersionDoc(tarball, integrity, dist["unpackedSize"]?.jsonPrimitive?.content?.toLongOrNull())
 }
 
 /**
@@ -179,7 +194,7 @@ class HttpNpmResolver(
         } catch (e: Exception) {
             throw ResolutionException("version lookup failed: ${e.message}")
         }
-        val (tarball, integrity) = try {
+        val doc = try {
             parseRegistryVersionDoc(client.get(registryVersionUrl(source.pkg, version)).bodyAsText())
         } catch (e: ResolutionException) {
             throw e
@@ -188,6 +203,11 @@ class HttpNpmResolver(
         } catch (e: Exception) {
             throw ResolutionException("registry metadata lookup failed: ${e.message}")
         }
-        return NpmResolution(version = version, url = tarball, integrity = integrity)
+        return NpmResolution(
+            version = version,
+            url = doc.tarball,
+            integrity = doc.integrity,
+            unpackedSize = doc.unpackedSize,
+        )
     }
 }

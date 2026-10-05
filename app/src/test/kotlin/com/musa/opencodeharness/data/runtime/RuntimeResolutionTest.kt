@@ -185,12 +185,51 @@ class RuntimeResolutionTest {
         val updateDoc = """{"channel":"latest","name":"cli","version":"2.0.22","active":true}"""
         assertEquals("2.0.22", parseUpdateEndpointVersion(updateDoc))
 
-        val registryDoc = """{"name":"@opencode/cli-linux-arm64-musl","version":"2.0.22",
-            "dist":{"tarball":"https://registry.npmjs.org/@opencode/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.0.22.tgz",
-                    "integrity":"sha512-AAA==","shasum":"bb"}}"""
-        val (tarball, integrity) = parseRegistryVersionDoc(registryDoc)
-        assertEquals("https://registry.npmjs.org/@opencode/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.0.22.tgz", tarball)
-        assertEquals("sha512-AAA==", integrity)
+        val registryDoc = """{"name":"@opencode/cli-linux-arm64-musl","version":"2.0.23",
+            "dist":{"tarball":"https://registry.npmjs.org/@opencode/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.0.23.tgz",
+                    "integrity":"sha512-AAA==","shasum":"bb","unpackedSize":198380997}}"""
+        val doc = parseRegistryVersionDoc(registryDoc)
+        assertEquals("https://registry.npmjs.org/@opencode/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.0.23.tgz", doc.tarball)
+        assertEquals("sha512-AAA==", doc.integrity)
+        assertEquals(198380997L, doc.unpackedSize)
+    }
+
+    @Test
+    fun `npm resolution carries npm's published unpackedSize into the resolved artifact`() = runBlocking {
+        val resolver = FakeResolver(resolution = NpmResolution(
+            version = "2.0.23",
+            url = "https://registry.npmjs.org/pkg/-/cli-2.0.23.tgz",
+            integrity = sriOf(body),
+            unpackedSize = 198_380_997L,
+        ))
+        val resolved = resolveArtifact(npmArtifact, resolver)
+        assertEquals(198_380_997L, resolved.unpackedSize)
+        // Pinned artifacts resolve with null, not a bogus zero/empty value.
+        val pinnedArtifact = Artifact(
+            id = "p", fileName = "p.bin",
+            source = ArtifactSource.Pinned("https://e.invalid/p", body.size.toLong(),
+                MessageDigest.getInstance("SHA-256").digest(body).joinToString("") { "%02x".format(it) }),
+        )
+        assertEquals(null, resolveArtifact(pinnedArtifact, resolver).unpackedSize)
+    }
+
+    @Test
+    fun `npm payload carries no pinned hash or size while every pinned payload keeps them`() {
+        val npmPayloads = embeddedRuntimeManifest.artifact("opencode-cli").payloads
+        assertEquals(1, npmPayloads.size)
+        assertEquals(null, npmPayloads.single().sha256)
+        assertEquals(null, npmPayloads.single().sizeBytes)
+
+        // Regression guard: every payload of every pinned artifact keeps its hash and size.
+        val pinnedArtifacts = embeddedRuntimeManifest.artifacts
+            .filter { it.source is ArtifactSource.Pinned }
+        assertTrue(pinnedArtifacts.isNotEmpty())
+        val pinnedPayloads = pinnedArtifacts.flatMap { it.payloads }
+        assertTrue(pinnedPayloads.isNotEmpty())
+        assertTrue(
+            "a pinned payload lost its hash or size: ${pinnedPayloads.filter { it.sha256 == null || it.sizeBytes == null }}",
+            pinnedPayloads.all { it.sha256 != null && it.sizeBytes != null && it.sha256.length == 64 },
+        )
     }
 
     @Test

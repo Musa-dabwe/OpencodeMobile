@@ -65,8 +65,20 @@ data class Payload(
     val name: String,
     /** Path of the member inside the container archive. */
     val memberPath: String,
-    val sizeBytes: Long,
-    val sha256: String,
+    /**
+     * Expected size of THIS member, for pinned artifacts only. Null for npm artifacts:
+     * per-member sizes drift on every upstream release and the right check there is the SUM
+     * of extracted member sizes against [NpmResolution.unpackedSize] (npm's total over ALL
+     * members, not just one), reachable via [ResolvedArtifact.unpackedSize].
+     */
+    val sizeBytes: Long? = null,
+    /**
+     * Expected SHA-256 of THIS member, pinned artifacts only. It is deliberately null for
+     * npm artifacts: the tarball's SHA-512 (from `dist.integrity`) already covers every
+     * member, so re-hashing a member verifies the same bytes twice and catches nothing. A
+     * payload hash only guards against extraction bugs for artifacts WE pinned.
+     */
+    val sha256: String? = null,
 )
 
 /** The pinned, parseable manifest of everything the runtime needs at first launch. */
@@ -104,10 +116,11 @@ val embeddedRuntimeManifest = RuntimeManifest(
                 minVersion = "2.0.0",
             ),
             payloads = listOf(
-                // From the 2.0.22 build verified on device; Task 3 should re-check whatever
-                // version actually resolved rather than assuming it.
-                Payload("opencode", "package/bin/opencode", 199_167_184,
-                    "8c892a86489235ad7fea0e6944e8f967709dde66e52249238f17cd7a09bb1971"),
+                // No pinned size/hash: those drifted 2.0.22 -> 2.0.23 (unpackedSize
+                // 199,167,429 -> 198,380,997) and a pinned value fails every upstream bump.
+                // Task 3 compares the SUM of extracted member sizes against
+                // ResolvedArtifact.unpackedSize (npm's published total, per version).
+                Payload("opencode", "package/bin/opencode"),
             ),
             note = "The OpenCode v2 server binary; URL and integrity resolve from npm at download time.",
         ),
