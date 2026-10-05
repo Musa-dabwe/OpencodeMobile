@@ -101,6 +101,15 @@ class RuntimeDownloader(
      * NOT re-detected on later runs. Callers that need a fresh guarantee may delete the
      * marker to force re-verification.
      */
+    /**
+     * "A verified artifact exists for this entry as of the last successful check" — and
+     * nothing more. For pinned artifacts that also implies "up to date" (the pin cannot
+     * change under a running app). For npm artifacts it does NOT: npm's published integrity
+     * may have advanced since the marker was written, and this overload deliberately does
+     * not hit the network to find out. If you need "is this npm's latest?", use
+     * [ensure] (or resolve + [isComplete(ResolvedArtifact)][isComplete]) — blind trust means
+     * accepting whatever npm published at resolve time, never claiming freshness offline.
+     */
     fun isComplete(artifact: Artifact): Boolean {
         // Pinned artifacts can be checked locally; npm artifacts must resolve first (their
         // marker token is npm's published integrity, which we do not know offline).
@@ -114,6 +123,8 @@ class RuntimeDownloader(
         return marker.readText().trim() == "${source.sizeBytes} ${source.sha256}"
     }
 
+    /** Like [isComplete(Artifact)], but checked against a resolved target — this is the
+     *  one that proves the on-disk bytes match npm's (or the pin's) CURRENT expected digest. */
     fun isComplete(resolved: ResolvedArtifact): Boolean {
         val dest = destination(resolved.artifact)
         val marker = trustedMarker(resolved.artifact)

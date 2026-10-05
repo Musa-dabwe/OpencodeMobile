@@ -36,7 +36,13 @@ data class ResolvedArtifact(
     val markerToken: String,
 )
 
-/** Parses [source]'s published integrity SRI and checks a file against it. */
+/**
+ * Parses a published integrity string and checks a file against it.
+ * Contract: [matches] never throws on a malformed digest — it returns false, because a digest
+ * we cannot parse can never authenticate a file. Inputs are trusted to be HTTPS-published
+ * digests already checked for algorithm prefix by [resolveArtifact]; this is defence-in-depth,
+ * not the primary guard.
+ */
 sealed interface ExpectedDigest {
     fun matches(file: java.io.File): Boolean
 }
@@ -49,7 +55,7 @@ data class Sha256Digest(val hex: String) : ExpectedDigest {
 /** npm-published SRI integrity string (`sha512-<base64>`). npm's own trust anchor. */
 data class Sha512SriDigest(val sri: String) : ExpectedDigest {
     override fun matches(file: java.io.File): Boolean {
-        require(sri.startsWith("sha512-")) { "unsupported integrity: $sri" }
+        if (!sri.startsWith("sha512-")) return false // malformed SRI can never match; not an exception
         val actualBase64 = java.util.Base64.getEncoder()
             .encodeToString(fileDigestBytes("SHA-512", file))
         return "sha512-$actualBase64" == sri
@@ -87,12 +93,18 @@ suspend fun resolveArtifact(artifact: Artifact, resolver: NpmArtifactResolver?):
             markerToken = "${source.sizeBytes} ${source.sha256}",
         )
         is ArtifactSource.Npm -> {
-            requireNotNull(resolver) {
-                "npm artifact '${artifact.id}' must be resolved: pass an NpmArtifactResolver"
+            if (resolver == null) {
+                throw ResolutionException(
+                    "npm artifact '${artifact.id}' needs an NpmArtifactResolver; none was provided"
+                )
             }
             val resolution = try {
                 resolver.resolve(source)
             } catch (e: ResolutionException) {
+                throw e
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is a control signal, not a download failure: propagate it
+                // instead of reporting the coroutine's own cancel as "resolution failed".
                 throw e
             } catch (e: Exception) {
                 throw ResolutionException("resolution failed for ${source.pkg}: ${e.message}")
@@ -162,12 +174,16 @@ class HttpNpmResolver(
             parseUpdateEndpointVersion(client.get(updateEndpoint).bodyAsText())
         } catch (e: ResolutionException) {
             throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw ResolutionException("version lookup failed: ${e.message}")
         }
         val (tarball, integrity) = try {
             parseRegistryVersionDoc(client.get(registryVersionUrl(source.pkg, version)).bodyAsText())
         } catch (e: ResolutionException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             throw ResolutionException("registry metadata lookup failed: ${e.message}")

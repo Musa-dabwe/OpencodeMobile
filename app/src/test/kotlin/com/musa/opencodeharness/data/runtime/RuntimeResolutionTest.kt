@@ -60,7 +60,9 @@ class RuntimeResolutionTest {
             lastUrl = url
             sink.write(body, offset.toInt(), body.size - offset.toInt())
             sink.flush()
-            return offset == 0L
+            // Contract: true iff offset > 0 and honored; false means the written bytes
+            // started at byte 0, which is exactly what this fake always writes.
+            return false
         }
     }
 
@@ -97,9 +99,7 @@ class RuntimeResolutionTest {
         assertEquals(expectedSri, downloader.trustedMarker(npmArtifact).readText().trim())
         assertTrue("marker-matching file must verify against npm's published SRI", Sha512SriDigest(expectedSri).matches(dest))
         // Resolution must have produced exactly the registry values used for fetch+verify.
-        val expected = NpmResolution("2.0.22", expectedUrl, expectedSri)
         assertEquals(expectedUrl, fetcher.lastUrl)
-        assertEquals(expectedSri, sriOf(body))
     }
 
     @Test
@@ -162,6 +162,20 @@ class RuntimeResolutionTest {
         assertFalse(downloader.destination(npmArtifact).exists())
         assertFalse(downloader.partial(npmArtifact).exists())
         assertFalse(downloader.trustedMarker(npmArtifact).exists())
+    }
+
+    @Test
+    fun `cancellation during resolution propagates instead of becoming ResolutionException`() = runBlocking {
+        val resolver = FakeResolver(failure = kotlinx.coroutines.CancellationException("job cancelled"))
+        val fetcher = FakeFetcher(body)
+        val downloader = RuntimeDownloader(tmp.root, fetcher, resolver)
+        var observed: Throwable? = null
+        try { downloader.ensure(npmArtifact) } catch (t: Throwable) { observed = t }
+        assertTrue(
+            "CancellationException must propagate, got ${observed?.javaClass?.name}: ${observed?.message}",
+            observed is kotlinx.coroutines.CancellationException,
+        )
+        assertEquals(0, fetcher.calls)
     }
 
     @Test
