@@ -201,4 +201,76 @@ class RuntimeDownloaderTest {
         assertTrue(embeddedRuntimeManifest.artifacts.all { it.sizeBytes > 0 })
         assertTrue(embeddedRuntimeManifest.artifacts.all { it.sha256.length == 64 })
     }
+
+    @Test
+    fun `resume against a range-ignoring server yields the correct verified file`() = runBlocking {
+        val artifact = artifactFor(body)
+        val downloader = RuntimeDownloader(tmp.root, FakeFetcher(body))
+        // Seed a 40k partial, as a kill would leave it.
+        downloader.partial(artifact).writeBytes(body.copyOf(40_000))
+
+        // Server IGNORES the Range header: full body, treated as a 200.
+        val ignoring = FakeFetcher(body, honorsRange = false)
+        val downloader2 = RuntimeDownloader(tmp.root, ignoring)
+        val dest = downloader2.ensure(artifact)
+
+        // The fake saw exactly one request, for the stored partial length, and answered 200.
+        assertEquals(listOf(40_000L, 0L), ignoring.requestedOffsets)
+        assertArrayEquals(body, dest.readBytes())
+        assertTrue(downloader2.isComplete(artifact))
+        assertEquals(
+            MessageDigest.getInstance("SHA-256").digest(body).joinToString("") { "%02x".format(it) },
+            MessageDigest.getInstance("SHA-256").digest(dest.readBytes()).joinToString("") { "%02x".format(it) },
+        )
+    }
+
+    @Test
+    fun `kill mid-download then range-ignoring server converges to correct artifact`() = runBlocking {
+        val artifact = artifactFor(body)
+        // Run 1: server resets after 40k; a `.part` remains.
+        val flaky = FakeFetcher(body, failAfterBytes = 40_000)
+        try { RuntimeDownloader(tmp.root, flaky).ensure(artifact) } catch (_: IOException) {}
+        assertEquals(40_000L, RuntimeDownloader(tmp.root, FakeFetcher(body)).partial(artifact).length())
+
+        // Run 2: server never honors Range.
+        val ignoring = FakeFetcher(body, honorsRange = false)
+        val downloader = RuntimeDownloader(tmp.root, ignoring)
+        val dest = downloader.ensure(artifact)
+
+        // First call asked for a resume; fallback rewrote from byte 0.
+        assertEquals(listOf(40_000L, 0L), ignoring.requestedOffsets)
+        assertArrayEquals(body, dest.readBytes())
+        assertTrue(downloader.isComplete(artifact))
+        assertFalse(downloader.partial(artifact).exists())
+    }
+
+    @Test
+    fun `stale part file is swept once the artifact is complete`() = runBlocking {
+        val artifact = artifactFor(body)
+        val downloader = RuntimeDownloader(tmp.root, FakeFetcher(body))
+        downloader.ensure(artifact)
+        assertTrue(downloader.isComplete(artifact))
+
+        // A leftover partial from an earlier, superseded attempt must not linger.
+        downloader.partial(artifact).writeBytes(body.copyOf(7_000))
+        downloader.ensure(artifact)
+
+        assertFalse(downloader.partial(artifact).exists())
+        assertTrue(downloader.isComplete(artifact))
+    }
+
+    @Test
+    fun `non-HTTPS artifact URL is refused before any bytes move`() = runBlocking {
+        val artifact = artifactFor(body).copy(url = "http://example.invalid/artifact.bin")
+        val fetcher = FakeFetcher(body)
+        val downloader = RuntimeDownloader(tmp.root, fetcher)
+
+        var failed: ArtifactDownloadException? = null
+        try { downloader.ensure(artifact) } catch (e: ArtifactDownloadException) { failed = e }
+        assertTrue(failed != null)
+        assertEquals(0, fetcher.calls)
+        assertFalse(downloader.destination(artifact).exists())
+        assertFalse(downloader.partial(artifact).exists())
+        assertFalse(downloader.isComplete(artifact))
+    }
 }

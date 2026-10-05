@@ -32,6 +32,13 @@ fun interface ArtifactFetcher {
      * Streams [url]'s body into [sink], resuming after [offset] already-downloaded bytes when
      * [offset] > 0. Returns true when the server honored the range (body starts at [offset]);
      * false when it sent the full body from byte 0. Throws on transport failure.
+     *
+     * Return-value contract, precisely: true iff [offset] > 0 AND the server honored the
+     * Range request, i.e. the bytes written start at [url] byte [offset]. false means the
+     * bytes written start at byte 0 — either because [offset] == 0 (the normal case) or
+     * because the server ignored the Range request and sent the whole body (caller must
+     * discard any partial already on disk). Callers may branch on the value ONLY when
+     * offset > 0.
      */
     suspend fun stream(url: String, offset: Long, sink: OutputStream): Boolean
 }
@@ -84,7 +91,16 @@ class RuntimeDownloader(
     fun partial(artifact: Artifact): File = File(artifactsDir, artifact.fileName + ".part")
     fun trustedMarker(artifact: Artifact): File = File(artifactsDir, artifact.fileName + ".trusted")
 
-    /** True only when a fully-verified artifact is on disk for the current manifest entry. */
+    /**
+     * True only when a fully-verified artifact is on disk for the current manifest entry.
+     *
+     * Deliberate decision: we trust the `.trusted` marker and do NOT re-hash the destination
+     * on every check. Re-hashing the 88 MB opencode artifact on every launch is expensive,
+     * and the marker is written only after a successful hash check. Consequence: corruption
+     * of the destination that happens *after* verification (disk rot, manual tampering) is
+     * NOT re-detected on later runs. Callers that need a fresh guarantee may delete the
+     * marker to force re-verification.
+     */
     fun isComplete(artifact: Artifact): Boolean {
         val dest = destination(artifact)
         val marker = trustedMarker(artifact)
@@ -96,9 +112,21 @@ class RuntimeDownloader(
     /**
      * Returns the trusted artifact file, downloading and verifying if needed. Never returns
      * a file whose hash has not been checked against [artifact].
+     *
+     * Trust freshness: the artifact URL must be HTTPS and the expected SHA-256 must match —
+     * non-HTTPS URLs are refused, making the documented "HTTPS + pinned SHA-256" trust root
+     * load-bearing rather than advisory.
      */
     suspend fun ensure(artifact: Artifact): File {
-        if (isComplete(artifact)) return destination(artifact)
+        if (!artifact.url.startsWith("https://", ignoreCase = true)) {
+            throw ArtifactDownloadException("refusing non-HTTPS artifact URL for ${artifact.id}")
+        }
+        if (isComplete(artifact)) {
+            // A leftover `.part` from a previous kill is never needed once the artifact is
+            // trusted; sweep it so it cannot be mistaken for in-progress state.
+            partial(artifact).delete()
+            return destination(artifact)
+        }
         artifactsDir.mkdirs()
 
         val part = partial(artifact)
@@ -112,15 +140,22 @@ class RuntimeDownloader(
         val resumed = appendInto(artifact, part, offset)
         if (!resumed && offset > 0L) {
             // Server ignored the Range request: the file now holds offset-bytes + whole body.
-            // Redo from byte 0.
+            // Redo from byte 0. Note on kill-during-fallback: the corrupt `.part` (old partial
+            // + appended whole body) exists on disk only between the append above and the
+            // delete below. If the process dies in that window, the next run sees a `.part`
+            // LONGER than the artifact (offset + full body), discards it via the length check
+            // above, and re-downloads from byte 0 — convergent, at the known cost of one
+            // duplicated full download on an ~89 MB artifact. Accepted: fixing it would need a
+            // second temp file for the redo, doubling peak disk usage for a rare kill window.
             part.delete()
             appendInto(artifact, part, 0L)
         }
 
         if (part.length() != artifact.sizeBytes) {
+            val actual = part.length()
             part.delete()
             throw ArtifactSizeException(
-                "${artifact.id}: expected ${artifact.sizeBytes} bytes, got ${part.length().coerceAtLeast(0)}"
+                "${artifact.id}: expected ${artifact.sizeBytes} bytes, got $actual"
             )
         }
         val actualSha = sha256Hex(part)

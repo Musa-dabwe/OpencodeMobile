@@ -26,8 +26,24 @@ data class Artifact(
     val sizeBytes: Long,
     /** Expected SHA-256 of the downloaded bytes, lowercase hex. */
     val sha256: String,
-    /** What this container yields after extraction, with extraction-level size/hash. */
+    /** What this container yields after extraction — structured for Task 3. */
+    val payloads: List<Payload> = emptyList(),
+    /** Freeform prose about the artifact; not consumed programmatically. */
     val note: String = "",
+)
+
+/**
+ * A file to be extracted out of a container artifact (`.tgz`/`.deb`/`.apk`). Structured so
+ * Task 3 consumes data rather than parsing [Artifact.note] prose.
+ */
+@Serializable
+data class Payload(
+    /** File name Task 3 installs under, e.g. `libstdc++.so.6`. */
+    val name: String,
+    /** Path of the member inside the container archive. */
+    val memberPath: String,
+    val sizeBytes: Long,
+    val sha256: String,
 )
 
 /** The pinned, parseable manifest of everything the runtime needs at first launch. */
@@ -63,10 +79,13 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://registry.npmjs.org/@opencode/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.0.22.tgz",
             sizeBytes = 88_533_443,
             sha256 = "8f2d1fab861b532210259aadfe14b6325d2d7184417eca4c443bcf6cc711e3bb",
-            // Extracts to package/bin/opencode (~199 MB unpacked). Verified end-to-end against
-            // npm's published dist.integrity (sha512), so this entry need not be believed on
-            // faith alone.
-            note = "The OpenCode v2 server binary; unpacked binary is package/bin/opencode.",
+            payloads = listOf(
+                Payload("opencode", "package/bin/opencode", 199_167_184,
+                    "8c892a86489235ad7fea0e6944e8f967709dde66e52249238f17cd7a09bb1971"),
+            ),
+            // Verified end-to-end against npm's published dist.integrity (sha512), so this
+            // entry need not be believed on faith alone.
+            note = "The OpenCode v2 server binary.",
         ),
         Artifact(
             id = "alpine-rootfs",
@@ -74,7 +93,8 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz",
             sizeBytes = 3_850_365,
             sha256 = "ead8a4b37867bd19e7417dd078748e2312c0aea364403d96758d63ea8ff261ea",
-            note = "Alpine 3.21.3 aarch64 minirootfs; the proot root filesystem.",
+            payloads = emptyList(),
+            note = "Alpine 3.21.3 aarch64 minirootfs; unpacked as-is into filesDir/runtime/rootfs.",
         ),
         Artifact(
             id = "proot",
@@ -82,10 +102,14 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.96_aarch64.deb",
             sizeBytes = 98_800,
             sha256 = "8199dca06dccb693ec09fb1759e3e1ad08b4863f0c11c612f89c20bd9ecdc1a0",
-            // bin/proot (247,488 bytes, sha256 1545b85b...dd717) + libexec/proot/loader
-            // (18,136 bytes, sha256 cbdef0e6...6b551). Both are extracted by Task 3; shas here
-            // verify the .deb container, not the extracted binaries.
-            note = "Termux .deb; extract bin/proot and libexec/proot/loader.",
+            payloads = listOf(
+                Payload("proot", "bin/proot", 247_488,
+                    "1545b85b312505db6eb6908ff8b2ded0a77a3bd689c50ae85aa7c1d8445dd717"),
+                Payload("proot-loader", "libexec/proot/loader", 18_136,
+                    "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551"),
+            ),
+            note = "Termux .deb; the entry's hash verifies the .deb container, payload hashes " +
+                "verify the extracted members.",
         ),
         Artifact(
             id = "libtalloc",
@@ -93,8 +117,11 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb",
             sizeBytes = 34_036,
             sha256 = "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7",
-            // Extracted payload libtalloc.so.2: 33,592 bytes, sha256 742b438c...6309.
-            note = "Termux .deb; extract lib/aarch64-linux-android/libtalloc.so.2.",
+            payloads = listOf(
+                Payload("libtalloc.so.2", "lib/aarch64-linux-android/libtalloc.so.2", 33_592,
+                    "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309"),
+            ),
+            note = "Termux .deb; proot link dependency.",
         ),
         Artifact(
             id = "libandroid-shmem",
@@ -102,8 +129,11 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
             sizeBytes = 7_216,
             sha256 = "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
-            // Extracted payload libandroid-shmem.so: 14,432 bytes, sha256 84475798...d731.
-            note = "Termux .deb; extract lib/aarch64-linux-android/libandroid-shmem.so.",
+            payloads = listOf(
+                Payload("libandroid-shmem.so", "lib/aarch64-linux-android/libandroid-shmem.so", 14_432,
+                    "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731"),
+            ),
+            note = "Termux .deb; proot link dependency.",
         ),
         Artifact(
             id = "libstdcxx",
@@ -111,9 +141,11 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64/libstdc++-14.2.0-r4.apk",
             sizeBytes = 906_144,
             sha256 = "93dded5af4e42ca59a2e981ffc5acc59c5d7110cec4adaeb15b84dc224526b63",
-            // Not a .so file itself: Task 3 extracts usr/lib/libstdc++.so.6 out of this Alpine
-            // package. Shipped as the .apk because that is the unit apkovl/packaging provides.
-            note = "Alpine .apk; extract usr/lib/libstdc++.so.6.",
+            payloads = listOf(
+                Payload("libstdc++.so.6", "usr/lib/libstdc++.so.6.0.33", 2_754_992,
+                    "1f1a71be4319632f743507ef7c6eaebaccad8d6f277055cf2c6b16b544f9f418"),
+            ),
+            note = "Alpine .apk; the download unit is the package, not the .so member.",
         ),
         Artifact(
             id = "libgcc",
@@ -121,7 +153,11 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64/libgcc-14.2.0-r4.apk",
             sizeBytes = 66_943,
             sha256 = "7cfdc00f102d3b98fe563b31e7a59a7b7ab61850c1751915f34e419e83ef2653",
-            note = "Alpine .apk; extract usr/lib/libgcc_s.so.1.",
+            payloads = listOf(
+                Payload("libgcc_s.so.1", "usr/lib/libgcc_s.so.1", 133_008,
+                    "69c45f16064b7b61b9a3d64c37395d13368a8fe719745d49e9508ec650fea971"),
+            ),
+            note = "Alpine .apk; the download unit is the package, not the .so member.",
         ),
         Artifact(
             id = "ca-certificates",
@@ -129,7 +165,11 @@ val embeddedRuntimeManifest = RuntimeManifest(
             url = "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64/ca-certificates-bundle-20260909-r0.apk",
             sizeBytes = 108_469,
             sha256 = "46aa3bd5988d0bed141242d957a52e4c871066ae4ae1c97195accc0b73e5b94a",
-            note = "Alpine .apk; extract etc/ssl/certs/ca-certificates.crt.",
+            payloads = listOf(
+                Payload("ca-certificates.crt", "etc/ssl/certs/ca-certificates.crt", 181_724,
+                    "028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232"),
+            ),
+            note = "Alpine .apk; the download unit is the package, not the .crt member.",
         ),
     ),
 )
