@@ -95,7 +95,15 @@ data class Artifact(
  */
 @Serializable
 data class InstallMember(
-    /** Path of the member inside the container archive, e.g. `package/bin/opencode`. */
+    /**
+     * Path of the member inside the container archive, e.g. `package/bin/opencode`.
+     *
+     * Exact as that archive stores it, so the string differs by container type and is deliberately
+     * NOT normalised across them: `.tgz`/`.apk` are plain tars (`usr/lib/libgcc_s.so.1`), while a
+     * `.deb` is an `ar` archive whose payload sits in an inner tar under Termux's install root
+     * (`./data/data/com.termux/files/usr/bin/proot`). Every value here was read out of the real
+     * artifact — a wrong path silently extracts nothing.
+     */
     val memberPath: String,
     /** File name Task 3 installs under, e.g. `opencode`. */
     val installAs: String,
@@ -221,8 +229,8 @@ val embeddedRuntimeManifest = RuntimeManifest(
                     "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551"),
             ),
             installMembers = listOf(
-                InstallMember(memberPath = "bin/proot", installAs = "proot"),
-                InstallMember(memberPath = "libexec/proot/loader", installAs = "proot-loader"),
+                InstallMember(memberPath = "./data/data/com.termux/files/usr/bin/proot", installAs = "proot"),
+                InstallMember(memberPath = "./data/data/com.termux/files/usr/libexec/proot/loader", installAs = "proot-loader"),
             ),
             note = "Termux .deb; the entry's hash verifies the .deb container, payload hashes " +
                 "verify the extracted members.",
@@ -244,7 +252,7 @@ val embeddedRuntimeManifest = RuntimeManifest(
                     "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309"),
             ),
             installMembers = listOf(
-                InstallMember(memberPath = "lib/aarch64-linux-android/libtalloc.so.2", installAs = "libtalloc.so.2"),
+                InstallMember(memberPath = "./data/data/com.termux/files/usr/lib/libtalloc.so.2", installAs = "libtalloc.so.2"),
             ),
             note = "Termux .deb; proot link dependency.",
         ),
@@ -265,7 +273,7 @@ val embeddedRuntimeManifest = RuntimeManifest(
                     "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731"),
             ),
             installMembers = listOf(
-                InstallMember(memberPath = "lib/aarch64-linux-android/libandroid-shmem.so", installAs = "libandroid-shmem.so"),
+                InstallMember(memberPath = "./data/data/com.termux/files/usr/lib/libandroid-shmem.so", installAs = "libandroid-shmem.so"),
             ),
             note = "Termux .deb; proot link dependency.",
         ),

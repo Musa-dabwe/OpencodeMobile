@@ -296,4 +296,43 @@ class RuntimeResolutionTest {
         assertEquals(UnpackMode.UNPACK_TREE, rootfs.unpackMode)
         assertTrue("an UNPACK_TREE artifact needs no member list", rootfs.installMembers.isEmpty())
     }
+
+    /**
+     * Locks the member paths to what the real archives actually contain.
+     *
+     * These were all wrong at least once. `.deb` payloads live under Termux's install root inside
+     * an inner tar (`./data/data/com.termux/files/usr/bin/proot`), not `bin/proot` — and a wrong
+     * path extracts nothing at all, failing later as a confusing "binary not found" rather than as
+     * a bad manifest. Keep this in step with `docs/runtime-artifacts.md` when bumping an artifact.
+     */
+    @Test
+    fun `member paths match the real archive layouts`() {
+        val debRoot = "./data/data/com.termux/files/usr/"
+        val expected = mapOf(
+            // .tgz (npm package) and .apk (Alpine package) are plain tars.
+            "opencode-cli" to listOf("package/bin/opencode"),
+            "proot" to listOf("${debRoot}bin/proot", "${debRoot}libexec/proot/loader"),
+            "libtalloc" to listOf("${debRoot}lib/libtalloc.so.2"),
+            "libandroid-shmem" to listOf("${debRoot}lib/libandroid-shmem.so"),
+            "libstdcxx" to listOf("usr/lib/libstdc++.so.6.0.33"),
+            "libgcc" to listOf("usr/lib/libgcc_s.so.1"),
+            "ca-certificates" to listOf("etc/ssl/certs/ca-certificates.crt"),
+        )
+
+        expected.forEach { (id, paths) ->
+            assertEquals(
+                "member paths drifted for '$id' — re-read them from the real archive",
+                paths,
+                embeddedRuntimeManifest.artifact(id).installMembers.map { it.memberPath },
+            )
+        }
+
+        // Every lifted member must be executable content, not a directory entry.
+        embeddedRuntimeManifest.artifacts
+            .filter { it.unpackMode == UnpackMode.LIFT_MEMBERS }
+            .flatMap { a -> a.installMembers.map { a.id to it.memberPath } }
+            .forEach { (id, path) ->
+                assertFalse("$id: '$path' looks like a directory entry", path.endsWith("/"))
+            }
+    }
 }
