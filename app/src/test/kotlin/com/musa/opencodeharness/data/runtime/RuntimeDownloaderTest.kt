@@ -27,10 +27,14 @@ class RuntimeDownloaderTest {
     private fun artifactFor(bytes: ByteArray): Artifact = Artifact(
         id = "test-artifact",
         fileName = "artifact.bin",
-        url = "https://example.invalid/artifact.bin",
-        sizeBytes = bytes.size.toLong(),
-        sha256 = sha256Hex(bytes),
+        source = ArtifactSource.Pinned(
+            url = "https://example.invalid/artifact.bin",
+            sizeBytes = bytes.size.toLong(),
+            sha256 = sha256Hex(bytes),
+        ),
     )
+
+    private fun Artifact.pinned(): ArtifactSource.Pinned = source as ArtifactSource.Pinned
 
     private fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -75,16 +79,16 @@ class RuntimeDownloaderTest {
         assertFalse(downloader.partial(artifact).exists())
         assertArrayEquals(body, dest.readBytes())
         // The marker must name THIS manifest entry's size and hash.
-        assertEquals("${artifact.sizeBytes} ${artifact.sha256}", downloader.trustedMarker(artifact).readText().trim())
+        assertEquals("${artifact.pinned().sizeBytes} ${artifact.pinned().sha256}", downloader.trustedMarker(artifact).readText().trim())
     }
 
     @Test
     fun `hash mismatch is rejected and leaves nothing trusted`() = runBlocking {
         // Manifest demands hash H of the GOOD body, but the server serves different bytes.
         val good = artifactFor(body)
-        val evil = good.copy(sha256 = good.sha256.replaceFirst("8f", "e7").let {
-            if (it == good.sha256) good.sha256.replaceFirst("8", "9") else it
-        })
+        val evil = good.copy(source = good.pinned().copy(sha256 = good.pinned().sha256.replaceFirst("8f", "e7").let {
+            if (it == good.pinned().sha256) good.pinned().sha256.replaceFirst("8", "9") else it
+        }))
         val downloader = RuntimeDownloader(tmp.root, FakeFetcher(body))
 
         var failed: ArtifactIntegrityException? = null
@@ -142,12 +146,12 @@ class RuntimeDownloaderTest {
 
         // 1) Final path holds a truncated copy of the real bytes, marker claims the real hash.
         downloader.destination(artifact).writeBytes(body.copyOf(body.size / 2))
-        downloader.trustedMarker(artifact).writeText("${artifact.sizeBytes} ${artifact.sha256}")
+        downloader.trustedMarker(artifact).writeText("${artifact.pinned().sizeBytes} ${artifact.pinned().sha256}")
         assertFalse(downloader.isComplete(artifact))
 
         // 2) Final path holds the real bytes but the marker names a different size (stale).
         downloader.destination(artifact).writeBytes(body)
-        downloader.trustedMarker(artifact).writeText("${artifact.sizeBytes / 2} ${artifact.sha256}")
+        downloader.trustedMarker(artifact).writeText("${artifact.pinned().sizeBytes / 2} ${artifact.pinned().sha256}")
         assertFalse(downloader.isComplete(artifact))
 
         // 3) Final path holds real bytes but NO marker at all (killed between rename and mark).
@@ -155,7 +159,7 @@ class RuntimeDownloaderTest {
         assertFalse(downloader.isComplete(artifact))
 
         // Positive control: the same final bytes + a correct marker is trusted.
-        downloader.trustedMarker(artifact).writeText("${artifact.sizeBytes} ${artifact.sha256}")
+        downloader.trustedMarker(artifact).writeText("${artifact.pinned().sizeBytes} ${artifact.pinned().sha256}")
         assertTrue(downloader.isComplete(artifact))
     }
 
@@ -184,22 +188,30 @@ class RuntimeDownloaderTest {
     fun `manifest round-trips through JSON and the embedded manifest is well-formed`() {
         val text = """
             {"schemaVersion": 1, "artifacts": [
-              {"id": "x", "fileName": "x.bin", "url": "https://e.invalid/x",
-               "sizeBytes": 4, "sha256": "deadbeef", "note": "n"}
+              {"id": "x", "fileName": "x.bin", "note": "n",
+               "source": {"type": "pinned", "url": "https://e.invalid/x",
+                          "sizeBytes": 4, "sha256": "deadbeef"}}
             ]}
         """.trimIndent()
         val parsed = parseRuntimeManifest(text)
         assertEquals(1, parsed.schemaVersion)
         assertEquals("x", parsed.artifact("x").id)
-        assertEquals(4L, parsed.artifact("x").sizeBytes)
+        assertEquals(4L, (parsed.artifact("x").source as ArtifactSource.Pinned).sizeBytes)
 
         val ids = embeddedRuntimeManifest.artifacts.map { it.id }
         assertEquals(ids.size, ids.toSet().size)
         assertTrue(ids.contains("opencode-cli"))
         assertTrue(ids.contains("alpine-rootfs"))
-        assertTrue(embeddedRuntimeManifest.artifacts.all { it.url.startsWith("https://") })
-        assertTrue(embeddedRuntimeManifest.artifacts.all { it.sizeBytes > 0 })
-        assertTrue(embeddedRuntimeManifest.artifacts.all { it.sha256.length == 64 })
+        val pinnedSources = embeddedRuntimeManifest.artifacts.mapNotNull { it.source as? ArtifactSource.Pinned }
+        assertEquals(embeddedRuntimeManifest.artifacts.size - 1, pinnedSources.size)
+        assertTrue(pinnedSources.all { it.url.startsWith("https://") })
+        assertTrue(pinnedSources.all { it.sizeBytes > 0 })
+        assertTrue(pinnedSources.all { it.sha256.length == 64 })
+        // Blind-trust policy: exactly one unpinned artifact, the npm one, with a declared floor.
+        val npm = embeddedRuntimeManifest.artifacts.map { it.source }
+            .filterIsInstance<ArtifactSource.Npm>().single()
+        assertEquals("@opencode/cli-linux-arm64-musl", npm.pkg)
+        assertEquals("2.0.0", npm.minVersion)
     }
 
     @Test
@@ -261,7 +273,7 @@ class RuntimeDownloaderTest {
 
     @Test
     fun `non-HTTPS artifact URL is refused before any bytes move`() = runBlocking {
-        val artifact = artifactFor(body).copy(url = "http://example.invalid/artifact.bin")
+        val artifact = artifactFor(body).let { it.copy(source = it.pinned().copy(url = "http://example.invalid/artifact.bin")) }
         val fetcher = FakeFetcher(body)
         val downloader = RuntimeDownloader(tmp.root, fetcher)
 

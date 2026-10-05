@@ -13,7 +13,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.security.MessageDigest
 
 /** The server refused or truncated the body. */
 class ArtifactDownloadException(message: String) : IOException(message)
@@ -86,6 +85,7 @@ class HttpArtifactFetcher(private val client: HttpClient) : ArtifactFetcher {
 class RuntimeDownloader(
     private val artifactsDir: File,
     private val fetcher: ArtifactFetcher,
+    private val resolver: NpmArtifactResolver? = null,
 ) {
     fun destination(artifact: Artifact): File = File(artifactsDir, artifact.fileName)
     fun partial(artifact: Artifact): File = File(artifactsDir, artifact.fileName + ".part")
@@ -102,12 +102,29 @@ class RuntimeDownloader(
      * marker to force re-verification.
      */
     fun isComplete(artifact: Artifact): Boolean {
+        // Pinned artifacts can be checked locally; npm artifacts must resolve first (their
+        // marker token is npm's published integrity, which we do not know offline).
+        val source = artifact.source as? ArtifactSource.Pinned ?: return markerPresent(artifact) {
+            destination(artifact).isFile
+        }
         val dest = destination(artifact)
         val marker = trustedMarker(artifact)
-        if (!dest.isFile || dest.length() != artifact.sizeBytes) return false
+        if (!dest.isFile || dest.length() != source.sizeBytes) return false
         if (!marker.isFile) return false
-        return marker.readText().trim() == "${artifact.sizeBytes} ${artifact.sha256}"
+        return marker.readText().trim() == "${source.sizeBytes} ${source.sha256}"
     }
+
+    fun isComplete(resolved: ResolvedArtifact): Boolean {
+        val dest = destination(resolved.artifact)
+        val marker = trustedMarker(resolved.artifact)
+        if (!dest.isFile) return false
+        resolved.sizeBytes?.let { if (dest.length() != it) return false }
+        if (!marker.isFile) return false
+        return marker.readText().trim() == resolved.markerToken
+    }
+
+    private inline fun markerPresent(artifact: Artifact, body: () -> Boolean): Boolean =
+        body() && trustedMarker(artifact).isFile
 
     /**
      * Returns the trusted artifact file, downloading and verifying if needed. Never returns
@@ -117,11 +134,15 @@ class RuntimeDownloader(
      * non-HTTPS URLs are refused, making the documented "HTTPS + pinned SHA-256" trust root
      * load-bearing rather than advisory.
      */
-    suspend fun ensure(artifact: Artifact): File {
-        if (!artifact.url.startsWith("https://", ignoreCase = true)) {
+    suspend fun ensure(artifact: Artifact): File =
+        ensure(resolveArtifact(artifact, resolver))
+
+    suspend fun ensure(resolved: ResolvedArtifact): File {
+        val artifact = resolved.artifact
+        if (!resolved.url.startsWith("https://", ignoreCase = true)) {
             throw ArtifactDownloadException("refusing non-HTTPS artifact URL for ${artifact.id}")
         }
-        if (isComplete(artifact)) {
+        if (isComplete(resolved)) {
             // A leftover `.part` from a previous kill is never needed once the artifact is
             // trusted; sweep it so it cannot be mistaken for in-progress state.
             partial(artifact).delete()
@@ -131,13 +152,14 @@ class RuntimeDownloader(
 
         val part = partial(artifact)
         var offset: Long = if (part.isFile) part.length() else 0L
-        if (offset > artifact.sizeBytes) {
+        val expectedSize = resolved.sizeBytes
+        if (expectedSize != null && offset > expectedSize) {
             // A `.part` longer than the artifact cannot be valid; discard and restart.
             part.delete()
             offset = 0L
         }
 
-        val resumed = appendInto(artifact, part, offset)
+        val resumed = appendInto(resolved, part, offset)
         if (!resumed && offset > 0L) {
             // Server ignored the Range request: the file now holds offset-bytes + whole body.
             // Redo from byte 0. Note on kill-during-fallback: the corrupt `.part` (old partial
@@ -148,22 +170,21 @@ class RuntimeDownloader(
             // duplicated full download on an ~89 MB artifact. Accepted: fixing it would need a
             // second temp file for the redo, doubling peak disk usage for a rare kill window.
             part.delete()
-            appendInto(artifact, part, 0L)
+            appendInto(resolved, part, 0L)
         }
 
-        if (part.length() != artifact.sizeBytes) {
+        if (expectedSize != null && part.length() != expectedSize) {
             val actual = part.length()
             part.delete()
             throw ArtifactSizeException(
-                "${artifact.id}: expected ${artifact.sizeBytes} bytes, got $actual"
+                "${artifact.id}: expected $expectedSize bytes, got $actual"
             )
         }
-        val actualSha = sha256Hex(part)
-        if (actualSha != artifact.sha256) {
+        if (!resolved.digest.matches(part)) {
             // Hard failure: delete the bad bytes and any marker so nothing trusts them again.
             part.delete()
             trustedMarker(artifact).delete()
-            throw ArtifactIntegrityException("${artifact.id}: sha256 mismatch")
+            throw ArtifactIntegrityException("${artifact.id}: integrity mismatch")
         }
 
         val dest = destination(artifact)
@@ -172,25 +193,12 @@ class RuntimeDownloader(
             part.copyTo(dest, overwrite = true)
             part.delete()
         }
-        trustedMarker(artifact).writeText("${artifact.sizeBytes} ${artifact.sha256}")
+        trustedMarker(artifact).writeText(resolved.markerToken)
         return dest
     }
 
-    private suspend fun appendInto(artifact: Artifact, part: File, offset: Long): Boolean =
+    private suspend fun appendInto(resolved: ResolvedArtifact, part: File, offset: Long): Boolean =
         FileOutputStream(part, offset > 0L).use { out ->
-            fetcher.stream(artifact.url, offset, out)
+            fetcher.stream(resolved.url, offset, out)
         }
-
-    private fun sha256Hex(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(64 * 1024)
-            var read = input.read(buffer)
-            while (read >= 0) {
-                digest.update(buffer, 0, read)
-                read = input.read(buffer)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
 }
