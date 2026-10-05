@@ -18,7 +18,12 @@ data class NpmResolution(
      * (package.json + bin/opencode, etc.). Task 3 compares the SUM of extracted member
      * sizes against this — comparing a single member to it is wrong by construction.
      */
-    val unpackedSize: Long? = null,
+    // Non-nullable: a registry document that lacks it is a ResolutionException, not a
+    // null. If it were nullable, Task 3 could not distinguish "pinned artifact" from
+    // "npm field missing", and the extraction size check would be silently skippable —
+    // while the SRI only guards the tarball bytes, not the extraction. See
+    // [parseRegistryVersionDoc].
+    val unpackedSize: Long,
 )
 
 /** Resolution failed, or the resolved version violates the declared floor. */
@@ -40,7 +45,14 @@ data class ResolvedArtifact(
     val digest: ExpectedDigest,
     /** Opaque token written to the `.trusted` marker after verification. */
     val markerToken: String,
-    /** npm's published total extraction size; null for pinned artifacts. Task 3's size check. */
+    /**
+     * npm's published total extraction size. Null if and only if the artifact is pinned —
+     * never null for an npm artifact, because a registry document missing the field is a
+     * ResolutionException at resolve time (see [NpmResolution]). Task 3's extraction check:
+     * the SUM of ALL extracted member sizes must equal this. It is deliberately NOT the sum
+     * of `payloads[].sizeBytes` — for npm artifacts those are null by policy (see
+     * [Artifact.payloads]).
+     */
     val unpackedSize: Long? = null,
 )
 
@@ -158,7 +170,7 @@ internal fun parseUpdateEndpointVersion(text: String): String =
 internal data class RegistryVersionDoc(
     val tarball: String,
     val integrity: String,
-    val unpackedSize: Long?,
+    val unpackedSize: Long,
 )
 
 internal fun parseRegistryVersionDoc(text: String): RegistryVersionDoc {
@@ -169,7 +181,11 @@ internal fun parseRegistryVersionDoc(text: String): RegistryVersionDoc {
     if (tarball == null || integrity == null) {
         throw ResolutionException("registry 'dist' missing 'tarball' or 'integrity'")
     }
-    return RegistryVersionDoc(tarball, integrity, dist["unpackedSize"]?.jsonPrimitive?.content?.toLongOrNull())
+    val rawSize = dist["unpackedSize"]?.jsonPrimitive?.content
+        ?: throw ResolutionException("registry 'dist' missing 'unpackedSize'")
+    val unpackedSize = rawSize.toLongOrNull()
+        ?: throw ResolutionException("registry 'dist.unpackedSize' is not numeric: '$rawSize'")
+    return RegistryVersionDoc(tarball, integrity, unpackedSize)
 }
 
 /**

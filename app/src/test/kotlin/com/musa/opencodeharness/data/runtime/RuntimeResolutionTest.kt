@@ -48,6 +48,7 @@ class RuntimeResolutionTest {
                 version = version,
                 url = "https://registry.npmjs.org/${source.pkg}/-/cli-linux-arm64-musl-$version.tgz",
                 integrity = integrity,
+                unpackedSize = 199_167_429L,
             )
         }
     }
@@ -89,7 +90,7 @@ class RuntimeResolutionTest {
     fun `resolution yields the registry URL and integrity, and the download is verified against them`() = runBlocking {
         val expectedUrl = "https://registry.npmjs.org/@opencode/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.0.22.tgz"
         val expectedSri = sriOf(body)
-        val resolver = FakeResolver(resolution = NpmResolution("2.0.22", expectedUrl, expectedSri))
+        val resolver = FakeResolver(resolution = NpmResolution("2.0.22", expectedUrl, expectedSri, 199_167_429L))
         val fetcher = FakeFetcher(body)
         val downloader = RuntimeDownloader(tmp.root, fetcher, resolver)
 
@@ -110,6 +111,7 @@ class RuntimeResolutionTest {
             version = "2.0.22",
             url = "https://registry.npmjs.org/pkg/-/artifact-2.0.22.tgz",
             integrity = sriOf(ByteArray(4) { 9 }), // published for DIFFERENT bytes
+            unpackedSize = 199_167_429L,
         ))
         val fetcher = FakeFetcher(body)
         val downloader = RuntimeDownloader(tmp.root, fetcher, resolver)
@@ -214,11 +216,10 @@ class RuntimeResolutionTest {
     }
 
     @Test
-    fun `npm payload carries no pinned hash or size while every pinned payload keeps them`() {
-        val npmPayloads = embeddedRuntimeManifest.artifact("opencode-cli").payloads
-        assertEquals(1, npmPayloads.size)
-        assertEquals(null, npmPayloads.single().sha256)
-        assertEquals(null, npmPayloads.single().sizeBytes)
+    fun `npm payloads list is empty by policy while every pinned payload keeps hash and size`() {
+        // Empty by policy: summing payload sizes would compare the one listed member
+        // against npm's all-members total and fail on every install.
+        assertEquals(0, embeddedRuntimeManifest.artifact("opencode-cli").payloads.size)
 
         // Regression guard: every payload of every pinned artifact keeps its hash and size.
         val pinnedArtifacts = embeddedRuntimeManifest.artifacts
@@ -230,6 +231,18 @@ class RuntimeResolutionTest {
             "a pinned payload lost its hash or size: ${pinnedPayloads.filter { it.sha256 == null || it.sizeBytes == null }}",
             pinnedPayloads.all { it.sha256 != null && it.sizeBytes != null && it.sha256.length == 64 },
         )
+    }
+
+    @Test
+    fun `registry document missing or non-numeric unpackedSize is a hard failure`() {
+        val missing = """{"dist":{"tarball":"https://e.invalid/x.tgz","integrity":"sha512-AAA=="}}"""
+        val nonNumeric = """{"dist":{"tarball":"https://e.invalid/x.tgz","integrity":"sha512-AAA==","unpackedSize":"big"}}"""
+        var missingFailed: ResolutionException? = null
+        try { parseRegistryVersionDoc(missing) } catch (e: ResolutionException) { missingFailed = e }
+        assertTrue(missingFailed?.message?.contains("unpackedSize") == true)
+        var nonNumericFailed: ResolutionException? = null
+        try { parseRegistryVersionDoc(nonNumeric) } catch (e: ResolutionException) { nonNumericFailed = e }
+        assertTrue(nonNumericFailed?.message?.contains("unpackedSize") == true)
     }
 
     @Test

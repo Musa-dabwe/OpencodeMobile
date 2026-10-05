@@ -49,7 +49,16 @@ data class Artifact(
     val fileName: String,
     /** How this artifact's URL + integrity are obtained. */
     val source: ArtifactSource,
-    /** What this container yields after extraction — structured for Task 3. */
+    /**
+     * What this container yields after extraction — structured for Task 3.
+     *
+     * Contract on the extraction check: for PINNED artifacts (where every Payload carries a
+     * non-null sizeBytes and sha256) Task 3 sums `payloads[].sizeBytes` and re-hashes each
+     * member. For NPM artifacts this list is empty BY POLICY and Task 3 instead compares the
+     * SUM OF ALL extracted member sizes against `ResolvedArtifact.unpackedSize`. Never sum
+     * `payloads[].sizeBytes` for an npm artifact — the list being empty makes that attempt
+     * a guaranteed-visible mismatch rather than a silent wrong comparison.
+     */
     val payloads: List<Payload> = emptyList(),
     /** Freeform prose about the artifact; not consumed programmatically. */
     val note: String = "",
@@ -115,13 +124,15 @@ val embeddedRuntimeManifest = RuntimeManifest(
                 pkg = "@opencode/cli-linux-arm64-musl",
                 minVersion = "2.0.0",
             ),
-            payloads = listOf(
-                // No pinned size/hash: those drifted 2.0.22 -> 2.0.23 (unpackedSize
-                // 199,167,429 -> 198,380,997) and a pinned value fails every upstream bump.
-                // Task 3 compares the SUM of extracted member sizes against
-                // ResolvedArtifact.unpackedSize (npm's published total, per version).
-                Payload("opencode", "package/bin/opencode"),
-            ),
+            // Deliberately EMPTY for the npm artifact. `payloads` is the list whose
+            // `sizeBytes` values are summed to check a PINNED artifact's extraction — and
+            // for opencode that sum would be wrong by construction, because npm's
+            // `unpackedSize` covers every member of the tarball (package.json included),
+            // not just `package/bin/opencode`. Listing a single member here would invite
+            // the failing comparison 199,167,184 != 199,167,429. For npm artifacts the
+            // extraction check is: the SUM of the sizes of ALL extracted members ==
+            // ResolvedArtifact.unpackedSize. Member to lift: package/bin/opencode.
+            payloads = emptyList(),
             note = "The OpenCode v2 server binary; URL and integrity resolve from npm at download time.",
         ),
         Artifact(
