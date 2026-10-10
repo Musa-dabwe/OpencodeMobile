@@ -1,0 +1,103 @@
+{
+  "$comment": [
+    "OpenCode Mobile design tokens, extracted from docs/ui/OpenCode Mobile - UI design.pdf.",
+    "Every hex here was SAMPLED from the rendered PDF pages at 150dpi, not eyeballed and not",
+    "copied from the old Material 3 mockups. The PDF is the source of truth; this file exists",
+    "so the palette is machine-readable and testable rather than living only in a screenshot.",
+    "dp scale: the PDF renders at 610px for a 393dp baseline viewport, i.e. 0.6443 dp/px.",
+    "The design shows DARK ONLY. There is no light palette in the source, so none is invented."
+  ],
+  "version": 1,
+  "source": "OpenCode Mobile - UI design.pdf",
+
+  "color": {
+    "background": {
+      "base": "#0C0C0E",
+      "raised": "#151517",
+      "raisedAlt": "#1E1D22",
+      "overlay": "#1A1A1C",
+      "scrim": "#0A0A0C",
+      "inset": "#050505"
+    },
+    "border": {
+      "subtle": "#232227",
+      "strong": "#302F35"
+    },
+    "text": {
+      "primary": "#F2F2F4",
+      "secondary": "#96959B",
+      "disabled": "#56555B",
+      "sectionHeader": "#8F8E95",
+      "onAccent": "#1A1A1C"
+    },
+    "accent": {
+      "base": "#FAB282",
+      "hover": "#FCB082",
+      "pressed": "#F9B282",
+      "muted": "#89624A"
+    },
+    "status": {
+      "idle": "#7DD88E",
+      "running": "#6A4F3C",
+      "error": "#E96776"
+    },
+    "agent": {
+      "primary": "#568FDA",
+      "subagent": "#75B086",
+      "experimental": "#AB5865"
+    },
+    "action": {
+      "rename": "#5A9AFC",
+      "renameBg": "#203552",
+      "delete": "#E36874",
+      "deleteBg": "#3A161A",
+      "blueFg": "#3A5687"
+    }
+  },
+
+  "typography": {
+    "$comment": [
+      "The PDF embeds a single subset font named 'Glyphless', so no real typeface metadata exists.",
+      "These roles are therefore read VISUALLY from the renders and must be treated as a close",
+      "approximation, not a measurement. Sizes are in sp; weights are Material/CSS-style 100-900."
+    ],
+    "screenTitle":   { "sizeSp": 28, "weight": 700, "trackingEm": -0.02, "role": "Sessions / Agents / Settings" },
+    "rowTitle":      { "sizeSp": 16, "weight": 600, "trackingEm": 0.0,  "role": "session and agent names" },
+    "meta":          { "sizeSp": 13, "weight": 400, "trackingEm": 0.0,  "role": "project · status · 2 subagents" },
+    "sectionHeader": { "sizeSp": 11, "weight": 600, "trackingEm": 0.12, "role": "TODAY / MODELS / SAFETY" },
+    "body":          { "sizeSp": 15, "weight": 400, "trackingEm": 0.0,  "role": "assistant prose" },
+    "label":         { "sizeSp": 12, "weight": 500, "trackingEm": 0.0,  "role": "tab labels, chips" },
+    "mono":          { "sizeSp": 13, "weight": 400, "trackingEm": 0.0,  "role": "paths, commands, diffs" }
+  },
+
+  "shape": {
+    "$comment": "Primary actions are FULL CAPSULES (radius = height/2), measured from the FAB.",
+    "capsule": 999,
+    "card": 12,
+    "chip": 6,
+    "fabHeightDp": 53,
+    "fabWidthDp": 145
+  },
+
+  "spacing": {
+    "$comment": "4dp base grid. Derived from the PDF's measured margins and gaps.",
+    "screenMarginDp": 16,
+    "sectionGapDp": 24,
+    "rowGapDp": 12,
+    "hairlineDp": 1
+  },
+
+  "elevation": {
+    "$comment": "The design has NO drop shadows. Depth is hairline borders plus surface lift.",
+    "useShadows": false,
+    "dividerColor": "#232227",
+    "dividerWidthDp": 1
+  },
+
+  "motion": {
+    "$comment": "Inferred from the design's static states; see spec section 7 for the full list.",
+    "fast": 150,
+    "medium": 250,
+    "respectRemoveAnimations": true
+  }
+}

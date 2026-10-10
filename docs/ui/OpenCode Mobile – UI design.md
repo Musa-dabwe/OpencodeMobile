@@ -1,5 +1,8 @@
 # OpenCode Mobile — UI design
 
+**Machine-readable tokens:** `app/src/main/assets/themes/opencode-mobile.json` — every hex sampled
+from the rendered PDF at 150 dpi. When this file and that JSON disagree, this file wins.
+
 **Status:** refined design, replaces the Phase 1 Material 3 mockups.
 **Source of truth:** `OpenCode Mobile – UI design.pdf` (10 pages, in this folder). This file is the
 extractable companion — every colour, type role, and component below was sampled or read out of that
@@ -61,15 +64,23 @@ There is no second "brand" colour — the peach is the only warm hue in the syst
 
 ## 2. Navigation
 
-Bottom bar, 5 tabs, on every root screen (Pages 6, 8, 10):
+Bottom bar, on every root screen (Pages 6, 8, 10). The PDF shows 5:
 
 ```
 Projects   Chat   Files   Agents   Settings
 ```
 
-Icon above a small label. The active tab is `accent`; inactive are muted `#45444A`.
-**Note:** this is `Projects / Chat / Files / Agents / Settings` — the old mockups had
-`Projects / Chat / Files / Terminal`, and `Agents` did not exist at all.
+Icon above a small label. The active tab is `accent`; inactive are muted.
+
+**Owner ruling: the Terminal tab stays.** The app therefore ships **6** tabs, in the design's order
+with Terminal restored next to Files:
+
+```
+Projects   Chat   Files   Terminal   Agents   Settings
+```
+
+Spec §5 has been amended to match. **Six tabs is at the upper limit for a bottom bar** — verify label
+fit on the 393dp baseline before committing to this order.
 
 ---
 
@@ -196,7 +207,7 @@ Directly buildable from this design today, against the Phase 2 runtime that now 
 **Requires later spec phases — do not build now:** composer/send/streaming, slash commands, approval
 sheet, permission model, MCP, skills, attachments, projects.
 
-### Naming correction to carry forward
+### Naming reconciliation
 
-The design uses **Agents**, not the old mockups' **Terminal**. There is no Terminal tab in the refined
-design, so `docs/specs/OpenCode Mobile – Build Spec.md`'s Terminal screen should be reconciled against it.
+The PDF has no Terminal tab; the spec had one. **Resolved by owner ruling: Terminal stays**, giving
+6 tabs (see §2). Spec §5 has been amended.

@@ -156,7 +156,9 @@ Base: `http://127.0.0.1:<port>/api/...`. OpenAPI spec: `https://opencode.ai/v2/o
 
 ## 5. Screens
 
-Bottom nav: **Projects · Chat · Files · Terminal · Settings**. **Design principle: the UI is a Jetpack Compose port of OpenCode Desktop.** Reuse its layout, labels, control types and settings structure wherever the phone form factor allows (section 5.8). Mockups: `opencode-harness-mockups.html`.
+Bottom nav (6 tabs): **Projects · Chat · Files · Terminal · Agents · Settings**. **Design principle: the UI follows the refined design in `docs/ui/OpenCode Mobile – UI design.pdf`**, replacing the earlier OpenCode Desktop port. Reuse its layout, labels, control types and settings structure wherever the phone form factor allows (section 5.8).
+
+> **Amended** — this originally read `Projects · Chat · Files · Terminal · Settings` and pointed at `opencode-harness-mockups.html`. The owner ruled that the **Terminal tab stays** and the refined design's **Agents** tab is added, giving 6 tabs. The mockups were replaced by the design PDF; the extracted tokens live in `app/src/main/assets/themes/opencode-mobile.json`. See `docs/plans/phase3-ui.md`.
 
 ### 5.1 First-run setup
 
@@ -294,8 +296,8 @@ OpenCode V2 themes are a JSON token tree: `text`, `background` (with `raised` de
 Implementation:
 
 1. Build a `OpenCodeTheme` Kotlin model mirroring that token tree, exposed through a `CompositionLocal`, bridged to Material 3 `ColorScheme`.
-2. **Do not invent hex values.** Extract the built-in `opencode` theme (dark and light) from the OpenCode source or package during Phase 0 and ship it as `assets/themes/opencode.json`. The loader must accept the V2 theme file format (hex, `transparent`, `$hue.x.y` references, state keys like `$hovered`).
-3. Users can import additional theme JSON files and pick from bundled ones. Default: `opencode`, mode `system`.
+2. **Do not invent hex values.** ~~Extract the built-in `opencode` theme (dark and light) from the OpenCode source or package during Phase 0 and ship it as `assets/themes/opencode.json`.~~ **Amended:** the refined design PDF (`docs/ui/`) is now the source of truth. Tokens were sampled from its rendered pages at 150 dpi and ship as `assets/themes/opencode-mobile.json`; the design is **dark only**, so no light palette is invented. The loader must still accept the V2 theme file format (hex, `transparent`, `$hue.x.y` references, state keys like `$hovered`) so a real OpenCode theme can be dropped in unchanged.
+3. Users can import additional theme JSON files and pick from bundled ones. Default: the refined design, **dark only for now** (was `opencode`, mode `system`).
 4. Typography: monospace for code, tool cards and terminal; a clean sans for prose. Ship a monospace font (check license).
 5. Surfaces: use `background.raised` levels for cards, sheets and dialogs. Keep borders 1 dp, low contrast. Generous touch targets (48 dp min).
 
@@ -343,6 +345,8 @@ Implementation:
 6. Test PTY WebSocket from the app.
 
 **Phase 1:** runtime service, setup flow, typed client, Chat with streaming text, tool cards, permissions, provider setup, theme. **Phase 2:** media rendering, attachments, diffs and revert, Files, Terminal, session management, sub-agent cards, child-session navigation and agent management (5.9). **Phase 3:** settings packs, diagnostics, theme import, polish and animation pass.
+
+> **Amended — this phase numbering is stale.** It predates the working plan files in `docs/plans/`, which are the authority on sequencing: `phase1-slice.md` (client, tree, minimal screen) → `phase2-runtime.md` (download, install, launch — **complete**) → `phase3-ui.md` (theme from the design PDF, 6-tab shell, Sessions, Settings). The "Phase 3" described above (settings packs, diagnostics, theme import, polish) remains **unstarted** and is not the same thing as `phase3-ui.md`.
 
 Acceptance for Phase 1: fresh install → setup completes offline-resumable → key entered → prompt streams → file edited in workspace → diff visible → permission prompt answered.
 
