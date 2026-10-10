@@ -328,16 +328,27 @@ class ProotHandle internal constructor(
     val port: Int,
     private val secret: ServerSecret,
     private val launcher: ProotLauncher,
-) {
-    val baseUrl: String get() = "http://127.0.0.1:$port"
+) : StartedServer {
+    override val baseUrl: String get() = "http://127.0.0.1:$port"
 
     /** In-memory only; goes to an Authorization header and the server's env, nothing else. */
-    val password: String get() = secret.expose()
+    override val password: String get() = secret.expose()
 
-    val log: LogBuffer get() = launcher.log
+    override val log: LogBuffer get() = launcher.log
 
     /** Collect this to observe Running -> Dead(exitCode, signal). */
-    val state: StateFlow<ServerState> get() = launcher.lifecycle.state
+    override val state: StateFlow<ServerState> get() = launcher.lifecycle.state
+
+    /**
+     * The child's pid, or null when the platform could not report one.
+     *
+     * `Process.pid()` is a Java 9 API that never made it into android.jar, so [pidOf] resolves
+     * it reflectively and returns -1 on every real Android device. Task 4 deferred this as
+     * cosmetic; it is now load-bearing, because a UI that renders "pid -1" is lying. Null is
+     * the honest answer and recovery never depended on the pid anyway — orphans are identified
+     * by argv (see [OrphanReaper]), not by a number read out of a dead process's record.
+     */
+    fun pidOrNull(): Int? = state.value.let { if (it is ServerState.Running) it.pid.takeIf { p -> p > 0 } else null }
 
     fun stop() = launcher.stop()
 

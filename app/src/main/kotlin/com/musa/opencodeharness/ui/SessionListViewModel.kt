@@ -5,18 +5,23 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.musa.opencodeharness.data.ApiException
 import com.musa.opencodeharness.data.OpenCodeApi
 import com.musa.opencodeharness.data.OpenCodeClient
-import com.musa.opencodeharness.data.ServerEndpoint
 import com.musa.opencodeharness.data.SessionNode
 import com.musa.opencodeharness.data.buildSessionTree
-import com.musa.opencodeharness.data.ApiException
+import com.musa.opencodeharness.data.runtime.setup.ProductionRuntime
+import com.musa.opencodeharness.data.runtime.setup.SessionRuntime
+import com.musa.opencodeharness.data.runtime.setup.SetupFailed
+import com.musa.opencodeharness.data.runtime.setup.SetupStep
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * The connection half of the screen. Exactly three cases, matching the three things the client
@@ -39,16 +44,29 @@ sealed interface ConnectionState {
 }
 
 /**
- * Everything the session screen renders: the connection state plus the session tree.
+ * Everything the session screen renders: the first-run flow's progress, the live log, any
+ * observed server death, and the connection state plus session tree.
  *
  * [roots] is the output of [buildSessionTree], not the flat server list, so the screen can
  * indent sub-agent sessions under their parent. It is non-empty only while [connection] is
  * [ConnectionState.Healthy] -- a failed load clears it rather than leaving a stale list on
  * screen next to an error.
+ *
+ * The setup fields are additive with defaults, so every existing construction site and test
+ * keeps working unchanged; that is deliberate rather than incidental, because a refactor of a
+ * tested state machine should not force its tests to change shape.
  */
 data class SessionListUiState(
     val connection: ConnectionState = ConnectionState.Connecting,
     val roots: List<SessionNode> = emptyList(),
+    /** Where the first-run flow is. [SetupStep.Ready] means the server answered `/api/health`. */
+    val setup: SetupStep = SetupStep.Idle,
+    /** Redacted, bounded tail: our progress lines plus the server's stdout/stderr. */
+    val logLines: List<String> = emptyList(),
+    /** Complete sentence once the server process is observed dead, else null. Never swallowed. */
+    val serverDeath: String? = null,
+    /** `127.0.0.1:<port>` of the server this app started. Null until one exists. */
+    val serverUrl: String? = null,
 ) {
     /**
      * True once the server answered and the list came back empty. Distinct from "still
@@ -57,82 +75,177 @@ data class SessionListUiState(
      */
     val isEmptyResult: Boolean
         get() = connection is ConnectionState.Healthy && roots.isEmpty()
+
+    /** True while the first-run flow still has work to do, so the screen can show progress. */
+    val isSettingUp: Boolean
+        get() = setup !is SetupStep.Ready && setup !is SetupStep.Failed
 }
 
 /**
- * Drives the one screen in this slice: connect, read the session list, group it into a tree.
+ * Drives the one screen in this slice: run setup, start the server, read the session list,
+ * group it into a tree.
  *
- * No dependency-injection framework is wired up (and none is needed yet), so the real
- * [OpenCodeClient] is built by [factory] from a [ServerEndpoint] and handed to this ViewModel
- * already constructed. [load] launches on `scope ?: viewModelScope` -- tests pass their own
- * scope, production passes none and gets `viewModelScope`.
+ * ## Two construction paths, deliberately
  *
- * Lifecycle: the interface this ViewModel holds ([OpenCodeApi]) deliberately does NOT extend
- * [AutoCloseable] -- fakes have nothing to close. The real client's ownership arrives as the
- * separate [closeable] parameter (null in tests, the same [OpenCodeClient] instance in
- * production), so the ViewModel releases the OkHttp engine exactly once in [onCleared] and
- * never calls `close()` on something (a fake) that did not need it. Exactly once because
- * [ViewModel.onCleared] runs exactly once per instance, and the ViewModel owns the closeable
- * outright -- nothing else closes it.
+ *  - [runtime] is the production path: the [SessionRuntime] owns download/install/start/health,
+ *    and its `run()` returns a client bound to the server **the launcher just started**. There
+ *    is no endpoint constant in this file any more; the base URL and password come from the
+ *    live `ProotHandle`.
+ *  - [api] is the test path: a fake, injected directly, so the state machine below is testable
+ *    with no network and no process.
+ *
+ * Exactly one of them must be non-null. The [closeable] releases real resources (the OkHttp
+ * engine and the server) exactly once, in [onCleared], and is null in tests because a fake owns
+ * nothing.
+ *
+ * Lifecycle note: `ViewModel.onCleared` runs when the Activity finishes for good, not on
+ * rotation, so the server and its engine survive a rotation and are released exactly once.
  */
 class SessionListViewModel(
-    private val api: OpenCodeApi,
+    /** Production: the runtime whose `run()` returns a client bound to the started server. */
+    private val runtime: SessionRuntime? = null,
+    /** Test: a pre-built seam. Mutually exclusive with [runtime]. */
+    private val api: OpenCodeApi? = null,
     private val closeable: AutoCloseable? = null,
     private val scope: CoroutineScope? = null,
 ) : ViewModel() {
 
+    init {
+        require((runtime == null) != (api == null)) {
+            "SessionListViewModel takes exactly one of runtime (production) or api (tests)"
+        }
+    }
+
     private val _state = MutableStateFlow(SessionListUiState())
     val state: StateFlow<SessionListUiState> = _state.asStateFlow()
 
+    /** The client in use. Set on first successful setup/load; closed once, in [onCleared]. */
+    private var activeApi: OpenCodeApi? = null
+    private var activeCloseable: AutoCloseable? = null
+
     init {
+        // Mirror the runtime's progress into the UI state. Collected in the same scope as the
+        // load, so a cleared ViewModel stops collecting rather than updating dead state.
+        runtime?.let { rt ->
+            (scope ?: viewModelScope).launch {
+                launch { rt.step.collect { s -> _state.update { it.copy(setup = s) } } }
+                launch { rt.logLines.collect { lines -> _state.update { it.copy(logLines = lines) } } }
+                launch {
+                    rt.serverDeath.collect { reason ->
+                        _state.update { it.copy(serverDeath = reason) }
+                        // A dead server must change what the user sees. Clearing the session
+                        // list stops "Connected" from sitting above a server that is gone.
+                        if (reason != null) {
+                            _state.update {
+                                it.copy(
+                                    connection = ConnectionState.Unreachable(
+                                        "The OpenCode server stopped: $reason"
+                                    ),
+                                    roots = emptyList(),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
         load()
     }
 
-    /** Re-runs health + session load. Wired to the retry action on the unreachable state. */
+    /** Re-runs setup + health + session load. Wired to the retry action on the unreachable state. */
     fun load() {
-        _state.value = SessionListUiState(connection = ConnectionState.Connecting)
+        _state.update { it.copy(connection = ConnectionState.Connecting) }
         (scope ?: viewModelScope).launch {
+            val client = resolveApi() ?: return@launch
+
             val health = try {
-                api.health()
+                client.health()
             } catch (cancellation: CancellationException) {
                 // Never swallow cancellation: the coroutine is being torn down (onCleared, or the
                 // ViewModel scope is cancelled) and must unwind normally. Catching Throwable
                 // below without this branch would convert a cancel into a rendered error.
                 throw cancellation
             } catch (cause: Throwable) {
-                _state.value = failed(describe(cause))
+                failed(describe(cause))
                 return@launch
             }
 
             if (!health.healthy) {
                 // The transport worked and the server answered, but with healthy=false. That is
                 // not unreachable, so it gets its own message rather than the generic one.
-                _state.value = failed("Server answered, but reported healthy=false.")
+                failed("Server answered, but reported healthy=false.")
                 return@launch
             }
 
             val sessions = try {
-                api.listSessions()
+                client.listSessions()
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (cause: Throwable) {
                 // Health is fine but the list did not come back, so saying "server unreachable"
                 // would be wrong. Say what actually happened.
-                _state.value = failed("Server is healthy, but the session list could not be read: ${describe(cause)}")
+                failed("Server is healthy, but the session list could not be read: ${describe(cause)}")
                 return@launch
             }
 
-            _state.value = SessionListUiState(
-                connection = ConnectionState.Healthy,
-                // Client-side grouping: the server has no children-listing route, so the tree is
-                // derived from the flat list on `parentID`.
-                roots = buildSessionTree(sessions),
-            )
+            _state.update {
+                it.copy(
+                    connection = ConnectionState.Healthy,
+                    // Client-side grouping: the server has no children-listing route, so the tree
+                    // is derived from the flat list on `parentID`.
+                    roots = buildSessionTree(sessions),
+                )
+            }
         }
     }
 
-    private fun failed(reason: String) =
-        SessionListUiState(connection = ConnectionState.Unreachable(reason))
+    /**
+     * The client to use, running setup first on the production path.
+     *
+     * This is the wiring the whole slice exists for: the endpoint is whatever
+     * [SessionRuntime.run] bound to the server the launcher started. There is no fallback to a
+     * constant, and no path on which a placeholder can be reached.
+     *
+     * The result is remembered so a retry after a transient failure re-uses the running server
+     * instead of spawning a second one; [RuntimeSetup] makes the same decision on its side.
+     */
+    private suspend fun resolveApi(): OpenCodeApi? {
+        activeApi?.let { return it }
+        val prebuilt = api
+        if (prebuilt != null) {
+            activeApi = prebuilt
+            return prebuilt
+        }
+        val rt = runtime ?: return null
+        return try {
+            rt.run().also { client ->
+                activeApi = client
+                // The client produced by setup owns an engine; the ViewModel owns it now.
+                activeCloseable = client as? AutoCloseable
+                _state.update { it.copy(serverUrl = loopbackOf(client)) }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (cause: Throwable) {
+            failed(describe(cause))
+            null
+        }
+    }
+
+    /**
+     * The endpoint the app is talking to, for the header line.
+     *
+     * Reads it off the base URL by removing the scheme, so no password and no credential is ever
+     * derived or displayed. Returns null when the URL is not one of ours, rather than guessing.
+     */
+    private fun loopbackOf(client: OpenCodeApi): String? =
+        (client as? OpenCodeClient)?.let { it.baseUrlForDisplay }
+
+    private fun failed(reason: String) {
+        _state.update {
+            it.copy(connection = ConnectionState.Unreachable(reason), roots = emptyList())
+        }
+    }
 
     /**
      * Maps a transport failure to one honest sentence. Nothing here reads a response body, logs,
@@ -142,6 +255,11 @@ class SessionListViewModel(
      * imports no HTTP-library types at all and every branch here is reachable from a plain fake.
      */
     private fun describe(cause: Throwable): String = when (cause) {
+        // A setup failure already carries a complete, user-presentable sentence -- and
+        // RuntimeSetup guarantees it was scrubbed before it was thrown. Rendering it is both
+        // safe and the difference between "Could not reach the server (SetupFailed)" and the
+        // actual reason the first run failed.
+        is SetupFailed -> cause.message?.takeIf { it.isNotBlank() } ?: "Setup failed."
         is ApiException.Unauthorized -> "Server rejected the credentials (HTTP 401)."
         is ApiException.ServerError -> "Server answered with HTTP ${cause.status}."
         is ApiException.Unreachable ->
@@ -154,32 +272,39 @@ class SessionListViewModel(
 
     override fun onCleared() {
         // ViewModel.onCleared runs when the Activity is finishing for good, not on rotation, so
-        // this is the right single place to release the OkHttp engine. Null for a fake.
+        // this is the right single place to release the OkHttp engine and stop the server. Null
+        // for a fake, which owns nothing.
+        try {
+            activeCloseable?.close()
+        } catch (ignored: Exception) {
+            // Never let release failure mask the original teardown.
+        }
         closeable?.close()
         super.onCleared()
     }
 
     companion object {
         /**
-         * Factory for `by viewModels { … }` in the Activity. Exists instead of a no-arg
-         * constructor so the endpoint stays an explicit input: swapping
-         * [ServerEndpoint.PLACEHOLDER] for the proot/Keystore wiring is a one-line change at the
-         * call site.
+         * Factory for `by viewModels { … }` in the Activity.
+         *
+         * Takes a directory (production passes `filesDir/runtime`), never a [com.musa.opencodeharness.data.ServerEndpoint]:
+         * the endpoint is discovered from the server the launcher starts, so it cannot be
+         * supplied by a caller and cannot go stale.
+         *
+         * The graph is built ONCE here, outside the initializer, so a `viewModels` re-creation
+         * (process death and restore) cannot build a second launcher or a second HTTP engine for
+         * a ViewModel that already owns one.
          */
-        fun factory(endpoint: ServerEndpoint = ServerEndpoint.PLACEHOLDER): ViewModelProvider.Factory =
-            viewModelFactory {
+        fun factory(runtimeDir: File, scope: CoroutineScope): ViewModelProvider.Factory {
+            val resources = ProductionRuntime.create(runtimeDir, scope)
+            return viewModelFactory {
                 initializer {
-                    // The real client is constructed HERE, from the injected endpoint, and
-                    // handed to the ViewModel already built -- the ViewModel never sees the
-                    // endpoint constant and never constructs its own dependency. The same
-                    // instance arrives twice: once as the [OpenCodeApi] it calls, once as the
-                    // [AutoCloseable] it owns for exactly one close in onCleared.
-                    val client = OpenCodeClient(
-                        baseUrl = endpoint.baseUrl,
-                        password = endpoint.password,
+                    SessionListViewModel(
+                        runtime = resources.runtime,
+                        closeable = resources.closeable,
                     )
-                    SessionListViewModel(api = client, closeable = client)
                 }
             }
+        }
     }
 }

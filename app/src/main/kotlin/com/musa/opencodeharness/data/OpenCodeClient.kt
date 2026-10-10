@@ -71,6 +71,15 @@ class OpenCodeClient(
     // password must never be logged. The ktor-client-logging dependency stays declared for a
     // later task that adds redacted diagnostics.
 
+    /**
+     * The loopback endpoint this client talks to, safe to display.
+     *
+     * `host:port` only. Deliberately not the full URL and never anything derived from the
+     * password: the header shows the user which of their own servers the app reached, and the
+     * second invariant of `ServerEndpoint` is that the password is never rendered.
+     */
+    val baseUrlForDisplay: String get() = base
+
     /** `GET /api/health` -> `{"healthy":true}`. Throws [ApiException] if it cannot be read. */
     override suspend fun health(): Health = call { http.get("$base/api/health").body() }
 
