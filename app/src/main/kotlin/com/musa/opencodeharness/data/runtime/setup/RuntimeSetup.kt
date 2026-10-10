@@ -476,9 +476,16 @@ object ProductionRuntime {
         val closeable: AutoCloseable,
     )
 
-    fun create(runtimeDir: File, scope: CoroutineScope): RuntimeResources {
+    fun create(runtimeDir: File, scope: CoroutineScope, nativeLibraryDir: File): RuntimeResources {
         val http = HttpClient(OkHttp)
-        val launcher = com.musa.opencodeharness.data.runtime.launch.ProotLauncher(runtimeDir)
+        val launcher = com.musa.opencodeharness.data.runtime.launch.ProotLauncher(
+            runtimeDir = runtimeDir,
+            // proot and its loader are EXECUTED, so they come from nativeLibraryDir (populated
+            // by extractNativeLibs), not from filesDir, where execve() is denied outright.
+            execDir = nativeLibraryDir,
+            prootFileName = com.musa.opencodeharness.data.runtime.launch.ProotLauncher.APK_PROOT_FILE_NAME,
+            loaderFileName = com.musa.opencodeharness.data.runtime.launch.ProotLauncher.APK_PROOT_LOADER_FILE_NAME,
+        )
         val stage = DownloadInstallStage.forRuntimeDir(runtimeDir, http)
         val setup = RuntimeSetup(
             manifest = com.musa.opencodeharness.data.runtime.embeddedRuntimeManifest,

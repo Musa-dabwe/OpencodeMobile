@@ -97,6 +97,85 @@ class ProotLauncherTest {
             writeText("fake-loader")
             setExecutable(true)
         }
+        // preflight also requires the two shared libraries that LD_LIBRARY_PATH points at.
+        // They are dlopen'd, never executed, so existence is the whole requirement.
+        File(planner.prootDir, "libtalloc.so.2").writeText("fake-talloc")
+        File(planner.prootDir, "libandroid-shmem.so").writeText("fake-shmem")
+    }
+
+    /**
+     * The proot EXECUTABLE may live outside the runtime dir.
+     *
+     * Android refuses to execve() anything in the app's home directory for apps targeting
+     * API 29+ -- observed on device as `error=13, Permission denied` -- so on a real device
+     * proot and its loader are executed out of `nativeLibraryDir`, which is where the package
+     * manager extracts `jniLibs`. The libraries stay in the runtime dir: they are dlopen'd via
+     * LD_LIBRARY_PATH, never executed, so filesDir is fine for them.
+     *
+     * Mutation that must break it: resolving the executable from the runtime dir only.
+     */
+    @Test
+    fun executableComesFromExecDirWhileLibrariesComeFromTheRuntimeDir() {
+        installRuntime() // rootfs + the two LD_LIBRARY_PATH libraries
+        val execDir = File(runtimeDir, "nativeLibs").apply { mkdirs() }
+        File(execDir, ProotLauncher.APK_PROOT_FILE_NAME).apply {
+            writeText("apk-proot")
+            setExecutable(true)
+        }
+        File(execDir, ProotLauncher.APK_PROOT_LOADER_FILE_NAME).apply {
+            writeText("apk-loader")
+            setExecutable(true)
+        }
+        var command: List<String>? = null
+        var env: Map<String, String>? = null
+        val launcher = ProotLauncher(
+            runtimeDir = runtimeDir,
+            execDir = execDir,
+            prootFileName = ProotLauncher.APK_PROOT_FILE_NAME,
+            loaderFileName = ProotLauncher.APK_PROOT_LOADER_FILE_NAME,
+            spawn = { c, e ->
+                command = c
+                env = e
+                // Never exits: the death observer blocks on a daemon thread, exactly as it
+                // would for a live server.
+                FakeProcess()
+            },
+        )
+
+        launcher.start()
+
+        assertEquals(File(execDir, ProotLauncher.APK_PROOT_FILE_NAME).absolutePath, command!!.first())
+        assertEquals(
+            File(execDir, ProotLauncher.APK_PROOT_LOADER_FILE_NAME).absolutePath,
+            env!!["PROOT_LOADER"],
+        )
+        assertEquals(planner.prootDir.absolutePath, env!!["LD_LIBRARY_PATH"])
+    }
+
+    /**
+     * A missing executable in the exec dir is named in the failure, not left to a raw errno.
+     *
+     * Mutation: dropping the preflight check for the exec paths.
+     */
+    @Test
+    fun missingExecutableInExecDirFailsWithAClearMessage() {
+        installRuntime()
+        val execDir = File(runtimeDir, "emptyExecDir").apply { mkdirs() }
+        val launcher = ProotLauncher(
+            runtimeDir = runtimeDir,
+            execDir = execDir,
+            prootFileName = ProotLauncher.APK_PROOT_FILE_NAME,
+            loaderFileName = ProotLauncher.APK_PROOT_LOADER_FILE_NAME,
+            spawn = { _, _ -> FakeProcess() },
+        )
+
+        val error = runCatching { launcher.start() }.exceptionOrNull()
+
+        assertTrue(error is ServerLaunchException)
+        assertTrue(
+            "must name the missing path: ${error?.message}",
+            error?.message?.contains(execDir.absolutePath) == true,
+        )
     }
 
     private fun cmdlineFor(port: Int) =

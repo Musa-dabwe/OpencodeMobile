@@ -295,8 +295,12 @@ class SessionListViewModel(
          * (process death and restore) cannot build a second launcher or a second HTTP engine for
          * a ViewModel that already owns one.
          */
-        fun factory(runtimeDir: File, scope: CoroutineScope): ViewModelProvider.Factory {
-            val resources = ProductionRuntime.create(runtimeDir, scope)
+        fun factory(
+            runtimeDir: File,
+            nativeLibraryDir: File,
+            scope: CoroutineScope,
+        ): ViewModelProvider.Factory {
+            val resources = ProductionRuntime.create(runtimeDir, scope, nativeLibraryDir)
             return viewModelFactory {
                 initializer {
                     SessionListViewModel(

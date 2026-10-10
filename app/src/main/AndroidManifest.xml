@@ -6,8 +6,16 @@
          server reach LLM providers. Without it Android denies every socket, including
          loopback. Verified on device: proot+Alpine could not create a socket at all. -->
     <uses-permission android:name="android.permission.INTERNET" />                
+    <!-- android:extractNativeLibs is REQUIRED, not an optimisation. From API 30 the platform
+         defaults it to false and loads .so files straight out of the APK, which leaves
+         nativeLibraryDir EMPTY. proot must be EXECUTED, and Android refuses execve() of
+         anything in the app's home directory (filesDir) for apps targeting API 29 or later.
+         Observed on the Reno 3 as "error=13, Permission denied" out of ProcessBuilder.
+         nativeLibraryDir is the one place the package manager extracts an executable the app
+         can run, so the files must really be extracted. See ProotLauncher.execDir. -->
     <application
         android:allowBackup="true"
+        android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"

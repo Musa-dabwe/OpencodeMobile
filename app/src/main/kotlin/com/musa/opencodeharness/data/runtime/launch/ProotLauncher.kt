@@ -99,6 +99,25 @@ class ProotLauncher(
     val log: LogBuffer = LogBuffer(),
     val lifecycle: ServerLifecycle = ServerLifecycle(),
     private val secretFactory: () -> ServerSecret = { ServerSecret.generate() },
+    /**
+     * Where the proot EXECUTABLE and its loader live.
+     *
+     * ## Why this is not the runtime dir
+     *
+     * Android refuses `execve()` of a binary in the app's home directory (`filesDir`) for
+     * apps targeting API 29+, and the launcher fails with `error=13, Permission denied`
+     * exactly there — verified on the OPPO Reno 3, see docs/phase0-findings.md. The one
+     * location the package manager extracts executables to is `nativeLibraryDir`, which the
+     * app cannot write (it is `system`-owned) but can execute from. So proot and its loader
+     * ship in `jniLibs/arm64-v8a/` and are executed from there; everything else stays in
+     * `filesDir/runtime`.
+     *
+     * Defaults to [InstallPlanner.prootDir], which is the behaviour all the unit tests and
+     * any environment where filesDir exec works expect.
+     */
+    private val execDir: File = planner.prootDir,
+    private val prootFileName: String = PROOT_FILE_NAME,
+    private val loaderFileName: String = PROOT_LOADER_FILE_NAME,
 ) {
     private val recordStore = LaunchRecordStore(File(runtimeDir, RECORD_FILE_NAME))
 
@@ -201,13 +220,19 @@ class ProotLauncher(
     /** Paths the plan requires to exist; Task 2/4 ruling: clear message, never a null deref. */
     private fun preflight() {
         val missing = mutableListOf<String>()
-        val proot = File(planner.prootDir, "proot")
-        val loader = File(planner.prootDir, "proot-loader")
         val opencode = File(planner.rootfsDir, "usr/local/bin/opencode")
         if (!planner.rootfsDir.isDirectory) missing += planner.rootfsDir.absolutePath
-        for (file in listOf(proot, loader, opencode)) {
+        // Executed by Android, so the exec bit is required and checked.
+        for (file in listOf(prootExecutable, prootLoader, opencode)) {
             if (!file.isFile) missing += file.absolutePath
             else if (!file.canExecute()) missing += "${file.absolutePath} (not executable)"
+        }
+        // Read by the dynamic linker via LD_LIBRARY_PATH, never executed: existence is enough.
+        for (file in listOf(
+            File(planner.prootDir, "libtalloc.so.2"),
+            File(planner.prootDir, "libandroid-shmem.so"),
+        )) {
+            if (!file.isFile) missing += file.absolutePath
         }
         if (missing.isNotEmpty()) {
             val message =
@@ -219,8 +244,14 @@ class ProotLauncher(
         }
     }
 
+    /** The proot binary itself. Executed, so it lives where Android allows exec. */
+    private val prootExecutable: File get() = File(execDir, prootFileName)
+
+    /** proot re-execs this as the guest's interpreter, so it is subject to the same rule. */
+    private val prootLoader: File get() = File(execDir, loaderFileName)
+
     private fun buildCommand(rootfs: File, port: Int): List<String> = listOf(
-        File(planner.prootDir, "proot").absolutePath,
+        prootExecutable.absolutePath,
         "-0",
         "--link2symlink",
         "-r", rootfs.absolutePath,
@@ -234,7 +265,10 @@ class ProotLauncher(
     )
 
     private fun buildEnv(secret: ServerSecret): Map<String, String> = linkedMapOf(
-        "PROOT_LOADER" to File(planner.prootDir, "proot-loader").absolutePath,
+        "PROOT_LOADER" to prootLoader.absolutePath,
+        // Read, not executed, so it may stay in filesDir: the dynamic loader searches this
+        // directory for libtalloc.so.2 / libandroid-shmem.so, which is why the two are
+        // co-located with each other in the first place.
         "LD_LIBRARY_PATH" to planner.prootDir.absolutePath,
         "PATH" to "/bin:/sbin:/usr/bin:/usr/sbin",
         "HOME" to "/root",
@@ -304,6 +338,17 @@ class ProotLauncher(
 
     internal companion object {
         const val RECORD_FILE_NAME: String = ".launch-record"
+
+        /** Installed names, used in the runtime dir. See [execDir]. */
+        const val PROOT_FILE_NAME: String = "proot"
+        const val PROOT_LOADER_FILE_NAME: String = "proot-loader"
+
+        /**
+         * Names the binaries ship under in `jniLibs/`, where the platform requires the
+         * `lib*.so` convention to extract a file as an executable at all.
+         */
+        const val APK_PROOT_FILE_NAME: String = "libproot.so"
+        const val APK_PROOT_LOADER_FILE_NAME: String = "libprootloader.so"
         const val STOP_GRACE_MILLIS: Long = 2_000
         const val LOG_DRAIN_MILLIS: Long = 1_000
 

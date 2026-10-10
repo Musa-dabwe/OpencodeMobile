@@ -4,6 +4,7 @@ import com.musa.opencodeharness.data.model.Agent
 import com.musa.opencodeharness.data.model.Command
 import com.musa.opencodeharness.data.model.Envelope
 import com.musa.opencodeharness.data.model.Health
+import com.musa.opencodeharness.data.model.ServerInfo
 import com.musa.opencodeharness.data.model.SessionInfo
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -80,8 +81,40 @@ class OpenCodeClient(
      */
     val baseUrlForDisplay: String get() = base
 
-    /** `GET /api/health` -> `{"healthy":true}`. Throws [ApiException] if it cannot be read. */
-    override suspend fun health(): Health = call { http.get("$base/api/health").body() }
+    /**
+     * Health probe. Throws [ApiException] if it cannot be read.
+     *
+     * ## Why this is two requests and not one
+     *
+     * The route moved between major versions, and both halves of the older advice were true
+     * only of v1.18.34:
+     *
+     *  - v1: `GET /api/health` -> `{"healthy":true}`, and `/api/info` did not exist (SPA HTML).
+     *  - v2.0.22, verified on device against the real binary: `GET /api/health` -> **404, empty
+     *    body**, and `GET /api/info` -> `{"version":"2.0.22",…}`. It is the OTHER way round.
+     *
+     * So `/api/health` stays the primary probe and `/api/info` is the fallback, taken only on a
+     * 404 specifically -- any other status is a real failure and is rethrown unchanged.
+     *
+     * ## Why the fallback still cannot be fooled by the SPA
+     *
+     * The reason the v1 notes warned off `/api/info` was that it returned `index.html` with
+     * `Content-Type: text/html`, so a status-only probe "succeeded" against the catch-all.
+     * That failure mode is closed structurally here, not by trusting the route name: the body
+     * is DECODED into [ServerInfo], whose `version` is non-null, so an HTML body throws during
+     * deserialisation and surfaces as a failure. A 200 is never enough on its own.
+     */
+    override suspend fun health(): Health {
+        try {
+            return call { http.get("$base/api/health").body<Health>() }
+        } catch (notFound: ApiException.ServerError) {
+            // Only a 404 means "this version moved the route". Anything else is a genuine
+            // failure (401, 500, ...) and must not be silently retried against another route.
+            if (notFound.status != HttpStatusCode.NotFound.value) throw notFound
+        }
+        val info = call { http.get("$base/api/info").body<ServerInfo>() }
+        return Health(healthy = info.version.isNotBlank())
+    }
 
     override suspend fun listSessions(): List<SessionInfo> =
         call { http.get("$base/api/session").body<Envelope<SessionInfo>>().data }

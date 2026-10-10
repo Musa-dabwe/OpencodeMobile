@@ -49,14 +49,36 @@ data class Cursor(
 )
 
 /**
- * `GET /api/health` -> `{"healthy":true}`.
+ * `GET /api/health` -> `{"healthy":true}` on OpenCode **v1.18.34**.
  *
- * NOT `/api/info`: that route does not exist on the server and falls through to the SPA
- * catch-all, returning `index.html` with `Content-Type: text/html`.
+ * ## On v2 this route does not exist
+ *
+ * Verified against the real v2.0.22 binary on the Reno 3: `GET /api/health` returns
+ * **404 Not Found** with an empty body. The v1 advice in this file -- "NOT /api/info, that
+ * route does not exist and returns the SPA's HTML" -- is exactly INVERTED on v2, where
+ * `/api/health` is the missing route and `/api/info` is the live JSON endpoint.
+ *
+ * Both shapes are therefore supported: [health] is decoded from `/api/health` and, only when
+ * that answers 404, from [ServerInfo] via `/api/info`. See [com.musa.opencodeharness.data.OpenCodeClient.health].
  */
 @Serializable
 data class Health(
     val healthy: Boolean,
+)
+
+/**
+ * `GET /api/info` -> `{"version":"2.0.22","pid":…,"urls":[…],"paths":{…}}` on v2.
+ *
+ * Only [version] is modelled, and it is modelled NON-NULL on purpose: it is what makes this
+ * response impossible to confuse with the SPA's `index.html`. Decoding a `<!doctype html>…`
+ * body into this type throws, so an HTML catch-all response can never be read as "healthy",
+ * which was the entire reason the v1 notes warned against a naive probe.
+ *
+ * Captured from the live server in `docs/samples/info.json`.
+ */
+@Serializable
+data class ServerInfo(
+    val version: String,
 )
 
 /** One element of `GET /api/session`. Ids match `^ses`. */

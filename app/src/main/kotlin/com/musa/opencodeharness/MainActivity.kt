@@ -34,6 +34,8 @@ class MainActivity : ComponentActivity() {
     private val viewModel: SessionListViewModel by viewModels {
         SessionListViewModel.factory(
             runtimeDir = File(filesDir, "runtime"),
+            // Where Android extracts jniLibs, and the only place the app may execute from.
+            nativeLibraryDir = File(applicationInfo.nativeLibraryDir),
             scope = lifecycleScope,
         )
     }

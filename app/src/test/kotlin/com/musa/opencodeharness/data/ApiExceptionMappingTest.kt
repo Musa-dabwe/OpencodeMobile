@@ -70,3 +70,66 @@ class ApiExceptionMappingTest {
         assertSame(already, mapped)
     }
 }
+/**
+ * The health probe's two-request shape, pinned against the REAL responses captured from the
+ * v2.0.22 binary on the Reno 3 (see docs/samples/health.json and docs/samples/info.json).
+ *
+ * These exist because the route moved between major versions and the old advice was exactly
+ * backwards for v2: on v1.18.34 `/api/health` was real and `/api/info` was the SPA's HTML,
+ * while on v2.0.22 `/api/health` is a 404 and `/api/info` is the live JSON endpoint.
+ */
+class HealthProbeRouteTest {
+
+    /** Same classpath convention as [RecordedResponseShapeTest]: docs/samples is a test resource dir. */
+    private fun sample(name: String): String =
+        checkNotNull(javaClass.classLoader?.getResourceAsStream(name)) {
+            "Missing recorded sample $name on the test classpath"
+        }.bufferedReader().use { it.readText() }
+
+    private val json = openCodeJson
+
+    /** The v1 shape still decodes, so an older server is not broken by the fallback. */
+    @Test
+    fun v1HealthDocumentStillDecodes() {
+        val health = json.decodeFromString<com.musa.opencodeharness.data.model.Health>(
+            sample("health.json")
+        )
+        assertTrue(health.healthy)
+    }
+
+    /** The real v2 capture decodes, and carries a non-blank version. */
+    @Test
+    fun v2InfoDocumentDecodes() {
+        val info = json.decodeFromString<com.musa.opencodeharness.data.model.ServerInfo>(
+            sample("info.json")
+        )
+        assertEquals("2.0.22", info.version)
+        assertTrue(info.version.isNotBlank())
+    }
+
+    /**
+     * THE property that matters: the SPA's HTML can never be read as healthy.
+     *
+     * This is the whole reason the v1 notes warned against probing `/api/info`. The fix is
+     * structural -- the body is decoded into a type with a non-null `version`, so HTML throws.
+     *
+     * Mutation: making `version` nullable, or checking the status code alone, fails this.
+     */
+    @Test
+    fun spaHtmlBodyCannotDecodeAsHealthy() {
+        val html = "<!doctype html><html><body><div id=root></div></body></html>"
+        val thrown = runCatching {
+            json.decodeFromString<com.musa.opencodeharness.data.model.ServerInfo>(html)
+        }.exceptionOrNull()
+        assertTrue("HTML must not decode as ServerInfo", thrown is kotlinx.serialization.SerializationException)
+    }
+
+    /** An empty 404 body (what v2 actually returns) must not decode either. */
+    @Test
+    fun emptyNotFoundBodyCannotDecodeAsHealthy() {
+        val thrown = runCatching {
+            json.decodeFromString<com.musa.opencodeharness.data.model.ServerInfo>("")
+        }.exceptionOrNull()
+        assertTrue(thrown != null)
+    }
+}
