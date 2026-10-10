@@ -43,6 +43,12 @@ There is no second "brand" colour — the peach is the only warm hue in the syst
 
 ### Type
 
+**Typeface: system default, by owner decision.** Nothing is bundled — no downloadable fonts, no
+`.ttf` in assets, no Google Fonts dependency, so there is no font licence to check. Sans roles use
+`FontFamily.Default`; the `mono` role uses `FontFamily.Monospace`. The PDF embeds only a subset font
+named `Glyphless`, so it carried no typeface to extract — the sizes and weights below were read
+visually from the renders and are an approximation.
+
 | Role | Treatment |
 |---|---|
 | Screen title | Large, bold, tight tracking (`Sessions`, `Agents`, `Settings`) |

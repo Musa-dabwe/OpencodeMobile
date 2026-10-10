@@ -298,7 +298,7 @@ Implementation:
 1. Build a `OpenCodeTheme` Kotlin model mirroring that token tree, exposed through a `CompositionLocal`, bridged to Material 3 `ColorScheme`.
 2. **Do not invent hex values.** ~~Extract the built-in `opencode` theme (dark and light) from the OpenCode source or package during Phase 0 and ship it as `assets/themes/opencode.json`.~~ **Amended:** the refined design PDF (`docs/ui/`) is now the source of truth. Tokens were sampled from its rendered pages at 150 dpi and ship as `assets/themes/opencode-mobile.json`; the design is **dark only**, so no light palette is invented. The loader must still accept the V2 theme file format (hex, `transparent`, `$hue.x.y` references, state keys like `$hovered`) so a real OpenCode theme can be dropped in unchanged.
 3. Users can import additional theme JSON files and pick from bundled ones. Default: the refined design, **dark only for now** (was `opencode`, mode `system`).
-4. Typography: monospace for code, tool cards and terminal; a clean sans for prose. Ship a monospace font (check license).
+4. Typography: **system typeface throughout, by owner decision — no font is bundled.** Monospace (`FontFamily.Monospace`) for code, tool cards and terminal; the system sans (`FontFamily.Default`) for everything else. No downloadable fonts, no bundled `.ttf`, no Google Fonts dependency, so there is no font licence to check.
 5. Surfaces: use `background.raised` levels for cards, sheets and dialogs. Keep borders 1 dp, low contrast. Generous touch targets (48 dp min).
 
 ### Animations (subtle, purposeful)

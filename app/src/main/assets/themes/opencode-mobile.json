@@ -57,10 +57,17 @@
 
   "typography": {
     "$comment": [
-      "The PDF embeds a single subset font named 'Glyphless', so no real typeface metadata exists.",
-      "These roles are therefore read VISUALLY from the renders and must be treated as a close",
-      "approximation, not a measurement. Sizes are in sp; weights are Material/CSS-style 100-900."
+      "TYPEFACE: system default, by owner decision. No font is bundled and none may be added --",
+      "no downloadable fonts, no .ttf in assets, no Google Fonts dependency. Resolve roles with",
+      "FontFamily.Default (system sans), and FontFamily.Monospace for the 'mono' role.",
+      "",
+      "The PDF embeds a single subset font named 'Glyphless', so it carries no real typeface",
+      "metadata either -- there was no typeface to extract. Only SIZE and WEIGHT are recorded",
+      "below, and those are read VISUALLY from the renders: a close approximation, not a",
+      "measurement. Correct them here if they look wrong on device, not in composables.",
+      "Sizes are in sp; weights are Material/CSS-style 100-900."
     ],
+    "typeface": "system",
     "screenTitle":   { "sizeSp": 28, "weight": 700, "trackingEm": -0.02, "role": "Sessions / Agents / Settings" },
     "rowTitle":      { "sizeSp": 16, "weight": 600, "trackingEm": 0.0,  "role": "session and agent names" },
     "meta":          { "sizeSp": 13, "weight": 400, "trackingEm": 0.0,  "role": "project · status · 2 subagents" },

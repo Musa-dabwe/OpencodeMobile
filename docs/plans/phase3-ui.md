@@ -76,10 +76,13 @@ Replace the Compose template theme with the extracted design.
   (Spec §7 step 1, retargeted at our own file.)
 - Implement the `$hue.x.y` reference and `transparent` forms the loader needs, so a future
   OpenCode-format theme can be dropped in unchanged.
-- Map typography roles from the JSON into Compose `TextStyle`. **The PDF embeds one subset font named
-  `Glyphless`, so there is no real typeface metadata** — sizes and weights in the JSON are read
-  visually from the renders and are a close approximation, not a measurement. Ship a monospace font
-  (licence check required) for the `mono` role; use the platform sans for everything else.
+- Map typography roles from the JSON into Compose `TextStyle`. **Typeface is the system default, by
+  owner decision: bundle nothing.** No downloadable fonts, no `.ttf` in assets, no Google Fonts
+  dependency, so there is no font licence to check. Resolve every role with `FontFamily.Default`,
+  except `mono` which uses `FontFamily.Monospace`.
+  The PDF embeds one subset font named `Glyphless`, so it carried no real typeface to extract
+  anyway — only sizes and weights, read visually from the renders as a close approximation. Correct
+  those in the JSON if they look wrong on device; do not special-case them in composables.
 - Kill `Purple80`/`Pink40`/`ComposeEmptyActivityTheme`.
 
 **Done when:** no template colour remains in the source tree, the app renders in the design's dark
