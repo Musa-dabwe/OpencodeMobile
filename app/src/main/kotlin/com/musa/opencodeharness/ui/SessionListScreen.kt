@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,7 +24,8 @@ import androidx.compose.ui.unit.dp
 import com.musa.opencodeharness.data.SessionNode
 import com.musa.opencodeharness.data.runtime.setup.SetupStep
 import com.musa.opencodeharness.data.model.SessionInfo
-import com.musa.opencodeharness.ui.theme.ComposeEmptyActivityTheme
+import com.musa.opencodeharness.ui.theme.Hairline
+import com.musa.opencodeharness.ui.theme.OpenCodeMobileTheme
 
 /**
  * The whole app, top to bottom: first-run progress, the live log, the connection status, and the
@@ -58,7 +58,7 @@ fun SessionListScreen(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         ConnectionHeader(state.connection, state.serverUrl, onRetry)
-        HorizontalDivider()
+        Hairline()
 
         // Death outranks everything else. A server that has exited must never leave the word
         // "Connected" on screen, so its reason is pinned above whatever else is being shown.
@@ -215,7 +215,7 @@ private fun SessionList(roots: List<SessionNode>) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(items = rows, key = { it.session.id }) { row ->
             SessionRow(session = row.session, depth = row.depth)
-            HorizontalDivider()
+            Hairline()
         }
     }
 }
@@ -327,7 +327,7 @@ private val previewOrphan = SessionInfo(
 @Preview(showBackground = true, name = "connected")
 @Composable
 private fun ConnectedPreview() {
-    ComposeEmptyActivityTheme {
+    OpenCodeMobileTheme {
         SessionListScreen(
             state = SessionListUiState(
                 connection = ConnectionState.Healthy,
@@ -349,7 +349,7 @@ private fun ConnectedPreview() {
 @Preview(showBackground = true, name = "empty")
 @Composable
 private fun EmptyPreview() {
-    ComposeEmptyActivityTheme {
+    OpenCodeMobileTheme {
         SessionListScreen(
             state = SessionListUiState(connection = ConnectionState.Healthy),
             onRetry = {},
@@ -360,7 +360,7 @@ private fun EmptyPreview() {
 @Preview(showBackground = true, name = "unreachable")
 @Composable
 private fun UnreachablePreview() {
-    ComposeEmptyActivityTheme {
+    OpenCodeMobileTheme {
         SessionListScreen(
             state = SessionListUiState(
                 connection = ConnectionState.Unreachable("Could not reach the server (ConnectException)."),

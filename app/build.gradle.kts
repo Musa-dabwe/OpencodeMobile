@@ -36,9 +36,14 @@ android {
 
     // The recorded server responses in docs/samples are the fixtures for the unit tests, so
     // they are put on the test classpath as-is rather than copied into the source tree.
+    //
+    // The theme asset goes on the same classpath for the same reason: the palette tests parse
+    // the REAL file, so a bad hex in the JSON is caught by the test that reads it rather than
+    // by a copy that quietly drifts away from what ships.
     sourceSets {
         getByName("test") {
             resources.srcDir(rootProject.layout.projectDirectory.dir("docs/samples"))
+            resources.srcDir(rootProject.layout.projectDirectory.dir("app/src/main/assets"))
         }
     }
 }
