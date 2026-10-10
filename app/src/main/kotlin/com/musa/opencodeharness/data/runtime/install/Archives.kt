@@ -27,12 +27,19 @@ class UnsupportedContainerException(message: String) : RuntimeException(message)
  */
 fun detectContainer(file: File): ContainerKind {
     val magic = ByteArray(8)
-    FileInputStream(file).use { it.read(magic) }
-    if (magic.size >= 2 && magic[0] == 0x1f.toByte() && magic[1] == 0x8b.toByte()) {
+    var read = 0
+    FileInputStream(file).use { input ->
+        while (read < magic.size) {
+            val n = input.read(magic, read, magic.size - read)
+            if (n < 0) break
+            read += n
+        }
+    }
+    if (read >= 2 && magic[0] == 0x1f.toByte() && magic[1] == 0x8b.toByte()) {
         return ContainerKind.TAR_GZ
     }
     val arMagic = "!<arch>\n".toByteArray(Charsets.US_ASCII)
-    if (magic.size >= arMagic.size && magic.copyOfRange(0, arMagic.size).contentEquals(arMagic)) {
+    if (read >= arMagic.size && magic.copyOfRange(0, arMagic.size).contentEquals(arMagic)) {
         return ContainerKind.DEB_XZ
     }
     throw UnsupportedContainerException("${file.name}: not a gzip stream or ar archive")

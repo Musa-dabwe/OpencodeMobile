@@ -51,6 +51,15 @@ class RuntimeInstaller(
 
     suspend fun install(artifact: Artifact) {
         val plan = planner.plan(artifact.id)
+        if (artifact.source is com.musa.opencodeharness.data.runtime.ArtifactSource.Pinned &&
+            artifact.unpackMode == UnpackMode.LIFT_MEMBERS
+        ) {
+            val memberPaths = artifact.installMembers.map { it.memberPath.removePrefix("./") }.toSet()
+            val payloadPaths = artifact.payloads.map { it.memberPath.removePrefix("./") }.toSet()
+            require(memberPaths == payloadPaths) {
+                "manifest disagrees with itself for ${artifact.id}: installMembers=$memberPaths payloads=$payloadPaths"
+            }
+        }
         if (isComplete(artifact.id)) return
         markersDir.mkdirs()
         val staging = File(runtimeDir, ".staging-${artifact.id}")
@@ -93,7 +102,7 @@ class RuntimeInstaller(
                         } catch (e: UnsupportedOperationException) {
                             // Filesystem without symlink support: fall back to materialising the
                             // link target IF that target also unpacks in this archive.
-                            val target = File(staging, entry.linkName.removePrefix("./"))
+                            val target = resolveContainedLinkTarget(staging, entry.linkName)
                             if (target.isFile) target.copyTo(dest, overwrite = true)
                             else throw ExtractionException("symlink ${entry.name} -> ${entry.linkName} unsupported and target not in archive")
                         }
@@ -109,7 +118,17 @@ class RuntimeInstaller(
             }
         }
         // Minirootfs ships no resolv.conf; DNS inside proot breaks without it.
+        // A hostile tree may have planted a symlink at staging/etc/resolv.conf (or made
+        // staging/etc itself a symlink). Follow-linking writeText would overwrite a host
+        // file outside staging, so: (1) prove the parent chain is inside staging via the
+        // canonical path, (2) delete() any pre-existing entry — delete() unlinks a symlink
+        // itself rather than its target — then create a fresh regular file.
         val etc = File(staging, "etc").apply { mkdirs() }
+        val canonicalStaging = staging.canonicalPath + File.separator
+        require(etc.canonicalPath == staging.canonicalPath || etc.canonicalPath.startsWith(canonicalStaging)) {
+            "staging etc/ escapes the install root (symlink?)"
+        }
+        File(etc, "resolv.conf").delete()
         File(etc, "resolv.conf").writeText(RESOLV_CONF)
         // Converge: only a complete staging tree gets the final name.
         val final = plan.treeDest!!
@@ -193,7 +212,7 @@ class RuntimeInstaller(
 
     private fun verifyMember(artifact: Artifact, member: MemberInstall, size: Long, sha: ByteArray) {
         if (artifact.source !is ArtifactSource.Pinned) return
-        val expected = artifact.payloads.firstOrNull { it.name == member.destFile.name }
+        val expected = artifact.payloads.firstOrNull { it.memberPath == member.memberPath }
             ?: throw ExtractionException("no Payload pin for member ${member.destFile.name}")
         if (expected.sizeBytes != size) {
             throw ExtractionException("${member.destFile.name}: size $size != expected ${expected.sizeBytes}")
@@ -203,4 +222,21 @@ class RuntimeInstaller(
             throw ExtractionException("${member.destFile.name}: sha256 mismatch")
         }
     }
+}
+
+/**
+ * Resolves a tar symlink's [linkName] to the file it would address, and PROVES that file is
+ * inside [staging] — used only when the filesystem rejects creating real symlinks and we
+ * must copy bytes instead of wiring a link. Absolute linkNames are treated as relative to
+ * the staging root (that is what they mean inside a rootfs tar). A linkName escaping the
+ * staging root throws: never follow it.
+ */
+internal fun resolveContainedLinkTarget(staging: File, linkName: String): File {
+    val rel = linkName.removePrefix("/").removePrefix("./")
+    val target = File(staging, rel)
+    val canonicalStaging = staging.canonicalPath + File.separator
+    require(target.canonicalPath == staging.canonicalPath || target.canonicalPath.startsWith(canonicalStaging)) {
+        "propagation-unsafe linkName escaping install root: $linkName"
+    }
+    return target
 }

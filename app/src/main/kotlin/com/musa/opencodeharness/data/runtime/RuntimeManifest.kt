@@ -223,9 +223,9 @@ val embeddedRuntimeManifest = RuntimeManifest(
 
             ),
             payloads = listOf(
-                Payload("proot", "bin/proot", 247_488,
+                Payload("proot", "./data/data/com.termux/files/usr/bin/proot", 247_488,
                     "1545b85b312505db6eb6908ff8b2ded0a77a3bd689c50ae85aa7c1d8445dd717"),
-                Payload("proot-loader", "libexec/proot/loader", 18_136,
+                Payload("proot-loader", "./data/data/com.termux/files/usr/libexec/proot/loader", 18_136,
                     "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551"),
             ),
             installMembers = listOf(
@@ -248,7 +248,7 @@ val embeddedRuntimeManifest = RuntimeManifest(
 
             ),
             payloads = listOf(
-                Payload("libtalloc.so.2", "lib/aarch64-linux-android/libtalloc.so.2", 33_592,
+                Payload("libtalloc.so.2", "./data/data/com.termux/files/usr/lib/libtalloc.so.2", 33_592,
                     "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309"),
             ),
             installMembers = listOf(
@@ -269,7 +269,7 @@ val embeddedRuntimeManifest = RuntimeManifest(
 
             ),
             payloads = listOf(
-                Payload("libandroid-shmem.so", "lib/aarch64-linux-android/libandroid-shmem.so", 14_432,
+                Payload("libandroid-shmem.so", "./data/data/com.termux/files/usr/lib/libandroid-shmem.so", 14_432,
                     "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731"),
             ),
             installMembers = listOf(

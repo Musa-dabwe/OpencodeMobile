@@ -1,17 +1,15 @@
 package com.musa.opencodeharness.data.runtime.install
 
+import com.musa.opencodeharness.data.runtime.Artifact
+import com.musa.opencodeharness.data.runtime.RuntimeManifest
+import com.musa.opencodeharness.data.runtime.UnpackMode
+import com.musa.opencodeharness.data.runtime.embeddedRuntimeManifest
 import java.io.File
 
-/**
- * The concrete destinations for one artifact's members. Pure data — produced by
- * [InstallPlanner.plan], consumed by [RuntimeInstaller], and asserted on in tests.
- */
 data class MemberInstall(
-    /** Exact member path inside the container archive. */
+    /** Exact member path inside the container archive — from the manifest, never re-typed. */
     val memberPath: String,
-    /** Absolute destination file (or symlink target decision) on disk. */
     val destFile: File,
-    /** Whether to set the executable bit. */
     val executable: Boolean,
 )
 
@@ -19,87 +17,71 @@ data class InstallPlan(
     val artifactId: String,
     /** Tree-unpack destination (rootfs), null for LIFT_MEMBERS. */
     val treeDest: File?,
-    /** Members to lift, for LIFT_MEMBERS. */
     val members: List<MemberInstall>,
 )
 
 /**
- * Maps manifest artifacts to concrete on-disk destinations. Path layout is fixed here —
- * the single place a Task-4 launcher can rely on:
+ * Derives install plans from the manifest. The manifest is the source of truth for WHICH
+ * members to lift and WHAT to call them ([com.musa.opencodeharness.data.runtime.Artifact.installMembers])
+ * and HOW to treat the container ([com.musa.opencodeharness.data.runtime.Artifact.unpackMode]);
+ * this class only owns destination DIRECTORIES.
  *
- * ```
+ * There is deliberately no per-artifact table of member paths here — a previous version
+ * duplicated every memberPath in a `when` and the two had already silently drifted
+ * (Payload.memberPath vs installMembers.memberPath), so a re-pin could have been ignored.
+ * The only remaining per-artifact choices are these two small maps:
+ *
  * filesDir/runtime/
- *   rootfs/                      <- alpine minirootfs, UNPACK_TREE; opencode + lifted libs land inside
- *     usr/local/bin/opencode     <- npm artifact's lifted binary
- *     usr/lib/libstdc++.so.6    <- real file, installed under the soname (see symlink note)
- *     usr/lib/libgcc_s.so.1
- *     etc/ssl/certs/ca-certificates.crt
- *     etc/resolv.conf            <- written by the installer (absent from minirootfs)
- *   proot/
- *     proot, proot-loader, libtalloc.so.2, libandroid-shmem.so
- * ```
- *
- * proot, its loader, and its two shared libraries MUST sit together: `PROOT_LOADER` and
- * `LD_LIBRARY_PATH` point at that directory, and verified-on-device findings say so. Do not
- * split them.
- *
- * Symlink decision for `libstdc++.so.6`: the apk ships it as a symlink to
- * `libstdc++.so.6.0.33`. We lift the versioned REAL member (the one [Payload] pins) and
- * install it under the soname as a plain file. Recreating a symlink would require also
- * shipping the versioned name under rootfs/usr/lib; a real file under the soname is one
- * fewer moving part and ldconfig/soname lookup both work because the file's own SONAME is
- * libstdc++.so.6.
+ *   rootfs/  (alpine minirootfs, UNPACK_TREE)
+ *     usr/local/bin/opencode
+ *     usr/lib/…, etc/ssl/certs/…
+ *   proot/   (proot, proot-loader, libtalloc.so.2, libandroid-shmem.so — co-located because
+ *            LD_LIBRARY_PATH and PROOT_LOADER point here; verified on device)
  */
-class InstallPlanner(private val runtimeDir: File) {
-
+class InstallPlanner(
+    private val runtimeDir: File,
+    private val manifest: RuntimeManifest = embeddedRuntimeManifest,
+) {
     val rootfsDir: File get() = File(runtimeDir, "rootfs")
     val prootDir: File get() = File(runtimeDir, "proot")
 
-    fun plan(artifactId: String): InstallPlan = when (artifactId) {
-        "alpine-rootfs" -> InstallPlan(artifactId, treeDest = rootfsDir, members = emptyList())
-        "opencode-cli" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("package/bin/opencode", File(rootfsDir, "usr/local/bin/opencode"), executable = true),
-            ),
-        )
-        "proot" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("./data/data/com.termux/files/usr/bin/proot", File(prootDir, "proot"), executable = true),
-                MemberInstall("./data/data/com.termux/files/usr/libexec/proot/loader", File(prootDir, "proot-loader"), executable = true),
-            ),
-        )
-        "libtalloc" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("./data/data/com.termux/files/usr/lib/libtalloc.so.2", File(prootDir, "libtalloc.so.2"), executable = false),
-            ),
-        )
-        "libandroid-shmem" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("./data/data/com.termux/files/usr/lib/libandroid-shmem.so", File(prootDir, "libandroid-shmem.so"), executable = false),
-            ),
-        )
-        "libstdcxx" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("usr/lib/libstdc++.so.6.0.33", File(rootfsDir, "usr/lib/libstdc++.so.6"), executable = false),
-            ),
-        )
-        "libgcc" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("usr/lib/libgcc_s.so.1", File(rootfsDir, "usr/lib/libgcc_s.so.1"), executable = false),
-            ),
-        )
-        "ca-certificates" -> InstallPlan(
-            artifactId, treeDest = null,
-            members = listOf(
-                MemberInstall("etc/ssl/certs/ca-certificates.crt", File(rootfsDir, "etc/ssl/certs/ca-certificates.crt"), executable = false),
-            ),
-        )
-        else -> throw IllegalArgumentException("No install plan for artifact '$artifactId'")
+    private enum class DestRoot { PROOT, USR_LOCAL_BIN, USR_LIB, CA_CERTS }
+
+    /** artifact id -> destination directory. The ONLY per-artifact choice left. */
+    private val DESTINATION = mapOf(
+        "proot" to DestRoot.PROOT,
+        "libtalloc" to DestRoot.PROOT,
+        "libandroid-shmem" to DestRoot.PROOT,
+        "opencode-cli" to DestRoot.USR_LOCAL_BIN,
+        "libstdcxx" to DestRoot.USR_LIB,
+        "libgcc" to DestRoot.USR_LIB,
+        "ca-certificates" to DestRoot.CA_CERTS,
+    )
+
+    /** installAs names that need the +x bit. */
+    private val EXECUTABLES = setOf("proot", "proot-loader", "opencode")
+
+    private fun destDir(root: DestRoot): File = when (root) {
+        DestRoot.PROOT -> prootDir
+        DestRoot.USR_LOCAL_BIN -> File(rootfsDir, "usr/local/bin")
+        DestRoot.USR_LIB -> File(rootfsDir, "usr/lib")
+        DestRoot.CA_CERTS -> File(rootfsDir, "etc/ssl/certs")
+    }
+
+    fun plan(artifactId: String): InstallPlan = plan(manifest.artifact(artifactId))
+
+    fun plan(artifact: Artifact): InstallPlan = when (artifact.unpackMode) {
+        UnpackMode.UNPACK_TREE -> InstallPlan(artifact.id, treeDest = rootfsDir, members = emptyList())
+        UnpackMode.LIFT_MEMBERS -> {
+            val root = DESTINATION[artifact.id]
+                ?: throw IllegalArgumentException("No destination directory mapped for artifact '${artifact.id}'")
+            InstallPlan(
+                artifact.id,
+                treeDest = null,
+                members = artifact.installMembers.map { m ->
+                    MemberInstall(m.memberPath, File(destDir(root), m.installAs), m.installAs in EXECUTABLES)
+                },
+            )
+        }
     }
 }

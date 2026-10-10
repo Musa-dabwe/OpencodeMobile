@@ -33,22 +33,66 @@ class RuntimeInstallerTest {
     private fun sha256Hex(bytes: ByteArray) =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
-    private fun tarGz(file: File, members: List<Pair<String, ByteArray>>, symlinks: List<Pair<String, String>> = emptyList()) {
+    private fun tarGz(
+        file: File,
+        members: List<Pair<String, ByteArray>>,
+        symlinks: List<Pair<String, String>> = emptyList(),
+        /** Write symlinks before members: needed when a member path traverses a planted link. */
+        symlinksFirst: Boolean = false,
+    ) {
         TarArchiveOutputStream(GZIPOutputStream(FileOutputStream(file))).use { tar ->
+            fun writeMembers() {
+                for ((name, data) in members) {
+                    val e = TarArchiveEntry(name)
+                    e.size = data.size.toLong()
+                    e.mode = 0b111_101_101 // rwxr-xr-x
+                    tar.putArchiveEntry(e)
+                    tar.write(data)
+                    tar.closeArchiveEntry()
+                }
+            }
+            fun writeSymlinks() {
+                for ((name, target) in symlinks) {
+                    val e = TarArchiveEntry(name, TarArchiveEntry.LF_SYMLINK)
+                    e.linkName = target
+                    tar.putArchiveEntry(e)
+                    tar.closeArchiveEntry()
+                }
+            }
+            if (symlinksFirst) { writeSymlinks(); writeMembers() } else { writeMembers(); writeSymlinks() }
+        }
+    }
+
+    /**
+     * Writes a gzip tar with byte-exact member names. Unlike [tarGz], this bypasses
+     * `TarArchiveEntry(String)`, whose `normalizeFileName` strips leading `/` — so a
+     * hostile absolute member ("/etc/passwd") actually reaches the reader. Production's
+     * `TarArchiveInputStream` does NOT normalise on read (verified against
+     * commons-compress 1.26.2), so this is what a real hostile archive looks like.
+     */
+    private fun tarGzRaw(file: File, members: List<Pair<String, ByteArray>>) {
+        GZIPOutputStream(FileOutputStream(file)).use { gz ->
             for ((name, data) in members) {
-                val e = TarArchiveEntry(name)
-                e.size = data.size.toLong()
-                e.mode = 0b111_101_101 // rwxr-xr-x
-                tar.putArchiveEntry(e)
-                tar.write(data)
-                tar.closeArchiveEntry()
+                val header = ByteArray(512)
+                val nb = name.toByteArray(Charsets.US_ASCII)
+                check(nb.size <= 100) { "name too long for ustar: $name" }
+                nb.copyInto(header, 0)
+                "0000777 ".toByteArray(Charsets.US_ASCII).copyInto(header, 100)
+                "0000000 ".toByteArray(Charsets.US_ASCII).copyInto(header, 108)
+                "0000000 ".toByteArray(Charsets.US_ASCII).copyInto(header, 116)
+                "%011o ".format(data.size).toByteArray(Charsets.US_ASCII).copyInto(header, 124)
+                "00000000000 ".toByteArray(Charsets.US_ASCII).copyInto(header, 136)
+                header[156] = '0'.code.toByte()
+                "ustar  \u0000".toByteArray(Charsets.US_ASCII).copyInto(header, 257)
+                var sum = 0
+                for (i in 0 until 512) sum += if (i in 148 until 156) 32 else header[i].toInt() and 0xFF
+                "%06o\u0000 ".format(sum).toByteArray(Charsets.US_ASCII).copyInto(header, 148)
+                gz.write(header)
+                gz.write(data)
+                val pad = (512 - data.size % 512) % 512
+                if (pad > 0) gz.write(ByteArray(pad))
             }
-            for ((name, target) in symlinks) {
-                val e = TarArchiveEntry(name, TarArchiveEntry.LF_SYMLINK)
-                e.linkName = target
-                tar.putArchiveEntry(e)
-                tar.closeArchiveEntry()
-            }
+            gz.write(ByteArray(1024))
         }
     }
 
@@ -138,10 +182,13 @@ class RuntimeInstallerTest {
         val runtime = tmp.newFolder("runtime")
         val tgz = File(artifacts, "libtalloc.deb.tgz")
         tarGz(tgz, listOf("./data/data/com.termux/files/usr/lib/libtalloc.so.2" to "bytes".toByteArray()))
+        // installMembers mirrors payloads (self-consistency guard); the memberPath is the
+        // real one so extraction reaches the hash check, which is what this test pins.
         val artifact = Artifact(
             id = "libtalloc", fileName = tgz.name,
             source = ArtifactSource.Pinned("https://x", tgz.length(), sha256Hex(tgz.readBytes())),
-            payloads = listOf(Payload("libtalloc.so.2", "x", 5, "00".repeat(32))),
+            payloads = listOf(Payload("libtalloc.so.2", "./data/data/com.termux/files/usr/lib/libtalloc.so.2", 5, "00".repeat(32))),
+            installMembers = listOf(InstallMember("./data/data/com.termux/files/usr/lib/libtalloc.so.2", "libtalloc.so.2")),
         )
         val inst = installer(runtime, artifacts)
         var failed = false
@@ -180,24 +227,58 @@ class RuntimeInstallerTest {
     }
 
     @Test
-    fun `npm install fails when a member is truncated out of the tar`() = runBlocking {
+    fun `npm install rejects an archive inflated beyond npm unpackedSize`() = runBlocking {
+        // Contract pin: the extraction total must cover EVERY member, including ones the
+        // installer did not install. Under a wrong "sum only installMembers bytes"
+        // implementation this archive would PASS (installMembers bytes == claimed total);
+        // under the correct contract it must FAIL because of the smuggled extra member.
         val artifacts = tmp.newFolder("artifacts")
         val runtime = tmp.newFolder("runtime")
         val bin = ByteArray(10_000)
+        val smuggled = ByteArray(245)
         val tgz = File(artifacts, "opencode-cli-linux-arm64-musl.tgz")
-        // Archive claims only bin/opencode; unpackedSize includes the missing package.json.
-        tarGz(tgz, listOf("package/bin/opencode" to bin))
+        tarGz(tgz, listOf("package/bin/opencode" to bin, "package/evil.txt" to smuggled))
         val artifact = Artifact(
             id = "opencode-cli", fileName = tgz.name,
             source = ArtifactSource.Npm("@opencode/cli-linux-arm64-musl", "2.0.0"),
             installMembers = listOf(InstallMember("package/bin/opencode", "opencode")),
         )
-        val resolved = ResolvedArtifact(artifact, "https://x", null, Sha512SriDigest("sha512-AAA="), "sha512-AAA=", (bin.size + 245).toLong())
+        // npm's unpackedSize claims only the binary: the smuggled member makes the
+        // real extraction 10_245 bytes, so a correct installer MUST reject this.
+        val resolved = ResolvedArtifact(artifact, "https://x", null, Sha512SriDigest("sha512-AAA="), "sha512-AAA=", bin.size.toLong())
         val inst = installer(runtime, artifacts) { resolved }
         var failed = false
         try { inst.install(artifact) } catch (e: ExtractionException) { failed = true }
         assertTrue(failed)
         assertFalse(inst.isComplete("opencode-cli"))
+        assertFalse(File(runtime, "rootfs/usr/local/bin/opencode").exists())
+    }
+
+    @Test
+    fun `manifest payload memberPaths agree with installMembers for pinned artifacts`() {
+        // Guards the drift that Important-1 found: Payload and installMembers must name the
+        // same members, so matching payloads by memberPath is well-defined.
+        for (artifact in embeddedRuntimeManifest.artifacts) {
+            if (artifact.source !is ArtifactSource.Pinned) continue
+            if (artifact.unpackMode != UnpackMode.LIFT_MEMBERS) continue
+            val members = artifact.installMembers.map { it.memberPath.removePrefix("./") }.toSet()
+            val payloads = artifact.payloads.map { it.memberPath.removePrefix("./") }.toSet()
+            assertEquals("${artifact.id}: payload/installMember memberPaths disagree", members, payloads)
+            // And pinned payloads keep their hashes/sizes (regression guard).
+            assertTrue(artifact.payloads.all { it.sha256 != null && it.sizeBytes != null })
+        }
+    }
+
+    @Test
+    fun `symlink fallback target resolution rejects escaping linkNames`() {
+        val staging = tmp.newFolder("staging")
+        // Absolute linkName is treated as rootfs-relative, inside staging: OK.
+        val ok = resolveContainedLinkTarget(staging, "/bin/busybox")
+        assertTrue(ok.canonicalPath.startsWith(staging.canonicalPath))
+        // Relative escape must throw, never be followed.
+        var failed = false
+        try { resolveContainedLinkTarget(staging, "../../outside/victim") } catch (e: IllegalArgumentException) { failed = true }
+        assertTrue(failed)
     }
 
     @Test
@@ -211,6 +292,7 @@ class RuntimeInstallerTest {
             id = "libgcc", fileName = apk.name,
             source = ArtifactSource.Pinned("https://x", apk.length(), sha256Hex(apk.readBytes())),
             payloads = listOf(Payload("libgcc_s.so.1", "usr/lib/libgcc_s.so.1", memberBytes.size.toLong(), sha256Hex(memberBytes))),
+            installMembers = listOf(InstallMember("usr/lib/libgcc_s.so.1", "libgcc_s.so.1")),
         )
         val inst = installer(runtime, artifacts)
         inst.install(artifact)
@@ -234,9 +316,11 @@ class RuntimeInstallerTest {
         val artifact = Artifact(
             id = "proot", fileName = debFile.name,
             source = ArtifactSource.Pinned("https://x", debFile.length(), sha256Hex(debFile.readBytes())),
+            // Real memberPaths (self-consistency guard); the loader is absent from the
+            // tar, so extraction must fail with "member ... not found".
             payloads = listOf(
-                Payload("proot", "x", 9, sha256Hex("proot-bin".toByteArray())),
-                Payload("proot-loader", "y", 10, "00".repeat(32)),
+                Payload("proot", "./data/data/com.termux/files/usr/bin/proot", 9, sha256Hex("proot-bin".toByteArray())),
+                Payload("proot-loader", "./data/data/com.termux/files/usr/libexec/proot/loader", 10, "00".repeat(32)),
             ),
             installMembers = listOf(
                 InstallMember("./data/data/com.termux/files/usr/bin/proot", "proot"),
@@ -262,7 +346,8 @@ class RuntimeInstallerTest {
         val artifact = Artifact(
             id = "libandroid-shmem", fileName = debFile.name,
             source = ArtifactSource.Pinned("https://x", debFile.length(), sha256Hex(debFile.readBytes())),
-            payloads = listOf(Payload("libandroid-shmem.so", "x", member.size.toLong(), sha256Hex(member))),
+            // Real memberPath (self-consistency guard) so extraction verifies and lifts.
+            payloads = listOf(Payload("libandroid-shmem.so", "./data/data/com.termux/files/usr/lib/libandroid-shmem.so", member.size.toLong(), sha256Hex(member))),
             installMembers = listOf(InstallMember("./data/data/com.termux/files/usr/lib/libandroid-shmem.so", "libandroid-shmem.so")),
         )
         val inst = installer(runtime, artifacts)
@@ -307,5 +392,78 @@ class RuntimeInstallerTest {
         assertEquals(RESOLV_CONF, File(runtime, "rootfs/etc/resolv.conf").readText())
         assertTrue(File(runtime, "rootfs/bin/sh").canExecute())
         assertTrue(inst.isComplete("alpine-rootfs"))
+    }
+
+    @Test
+    fun `planted resolv conf symlink cannot escape the staging root`() = runBlocking {
+        // Hostile rootfs: plants etc/resolv.conf as a symlink to an outside file. The
+        // installer must not let its own resolv.conf write follow that link.
+        val outsideDir = tmp.newFolder("outside")
+        val outside = File(outsideDir, "victim.conf").apply { writeText("ORIGINAL") }
+        val artifacts = tmp.newFolder("artifacts")
+        val runtime = tmp.newFolder("runtime")
+        val tgz = File(artifacts, "alpine.tar.gz")
+        tarGz(
+            tgz,
+            members = listOf("etc/hostname" to "h".toByteArray()),
+            symlinks = listOf("etc/resolv.conf" to outside.absolutePath),
+        )
+        val artifact = Artifact(
+            id = "alpine-rootfs", fileName = tgz.name,
+            source = ArtifactSource.Pinned("https://x", tgz.length(), sha256Hex(tgz.readBytes())),
+            unpackMode = UnpackMode.UNPACK_TREE,
+        )
+        val inst = installer(runtime, artifacts)
+        inst.install(artifact)
+        assertEquals("outside file must survive", "ORIGINAL", outside.readText())
+        assertEquals(RESOLV_CONF, File(runtime, "rootfs/etc/resolv.conf").readText())
+    }
+
+    @Test
+    fun `absolute member path in a tree archive is rejected`() = runBlocking {
+        val artifacts = tmp.newFolder("artifacts")
+        val runtime = tmp.newFolder("runtime")
+        val tgz = File(artifacts, "alpine.tar.gz")
+        // MUST use tarGzRaw: tarGz's TarArchiveEntry strips leading "/" at write time,
+        // so the archive would contain "etc/passwd" and the test would be vacuous.
+        tarGzRaw(tgz, listOf("/etc/passwd" to "x".toByteArray()))
+        val artifact = Artifact(
+            id = "alpine-rootfs", fileName = tgz.name,
+            source = ArtifactSource.Pinned("https://x", tgz.length(), sha256Hex(tgz.readBytes())),
+            unpackMode = UnpackMode.UNPACK_TREE,
+        )
+        val inst = installer(runtime, artifacts)
+        var failed = false
+        try { inst.install(artifact) } catch (e: IllegalArgumentException) { failed = true }
+        assertTrue(failed)
+        assertFalse(inst.isComplete("alpine-rootfs"))
+    }
+
+    @Test
+    fun `file written through a planted dir symlink cannot escape staging`() = runBlocking {
+        // Hostile rootfs: 'etc' is a symlink to an outside dir (absolute linkName), and a
+        // later member 'etc/pwned' would resolve outside staging. The canonical-path
+        // guard resolves through the planted link and must reject the write.
+        val outsideDir = tmp.newFolder("outside")
+        val artifacts = tmp.newFolder("artifacts")
+        val runtime = tmp.newFolder("runtime")
+        val tgz = File(artifacts, "alpine.tar.gz")
+        tarGz(
+            tgz,
+            members = listOf("etc/pwned" to "pwned".toByteArray()),
+            symlinks = listOf("etc" to outsideDir.absolutePath),
+            symlinksFirst = true,
+        )
+        val artifact = Artifact(
+            id = "alpine-rootfs", fileName = tgz.name,
+            source = ArtifactSource.Pinned("https://x", tgz.length(), sha256Hex(tgz.readBytes())),
+            unpackMode = UnpackMode.UNPACK_TREE,
+        )
+        val inst = installer(runtime, artifacts)
+        var failed = false
+        try { inst.install(artifact) } catch (e: IllegalArgumentException) { failed = true }
+        assertTrue(failed)
+        assertFalse(File(outsideDir, "pwned").exists())
+        assertFalse(inst.isComplete("alpine-rootfs"))
     }
 }
