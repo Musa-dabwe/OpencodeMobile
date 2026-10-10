@@ -7,14 +7,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musa.opencodeharness.ui.SessionListScreen
 import com.musa.opencodeharness.ui.SessionListViewModel
+import com.musa.opencodeharness.ui.nav.AppShell
+import com.musa.opencodeharness.ui.nav.NavTab
+import com.musa.opencodeharness.ui.nav.PlaceholderDestination
 import com.musa.opencodeharness.ui.theme.OpenCodeMobileTheme
 import androidx.lifecycle.lifecycleScope
 import java.io.File
@@ -56,12 +58,24 @@ class MainActivity : ComponentActivity() {
                 // Lifecycle-aware: collection stops when the Activity is stopped, so a
                 // backgrounded app is not re-rendering a session list nobody can see.
                 val state by viewModel.state.collectAsStateWithLifecycle()
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    SessionListScreen(
-                        state = state,
-                        onRetry = viewModel::load,
-                        modifier = Modifier.padding(innerPadding),
-                    )
+
+                // Survives rotation and process death via the SaveableStateRegistry, so a
+                // relaunch comes back to the tab the user left rather than to Chat every time.
+                // Started on Chat because that is the only destination with content: opening on a
+                // placeholder is a worse first screen than opening on the app's real content.
+                var tab by rememberSaveable { mutableStateOf(NavTab.startDestination) }
+
+                AppShell(selected = tab, onSelect = { tab = it }) { destination ->
+                    when (destination) {
+                        // The one destination with real content. `SessionListScreen` is untouched:
+                        // it is restyled to the design in Task 3, not here.
+                        NavTab.CHAT -> SessionListScreen(
+                            state = state,
+                            onRetry = viewModel::load,
+                        )
+                        // Honest placeholders. No invented rows, no fake "you have no projects".
+                        else -> PlaceholderDestination(destination)
+                    }
                 }
             }
         }

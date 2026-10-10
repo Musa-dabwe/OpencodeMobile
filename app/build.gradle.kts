@@ -24,6 +24,15 @@ android {
         compose = true
     }
 
+    // Robolectric needs the merged resources/assets to inflate and lay out a real Activity, which
+    // is what a Compose UI test runs inside. Without this the Compose tests fail on a missing
+    // resource rather than on anything about the code under test.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -72,4 +81,15 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
+    // Compose UI tests on the JVM. `ui-test-manifest` is the debug-only half of this pair and is
+    // already declared above; Robolectric supplies the Android runtime those tests draw against.
+    testImplementation(libs.androidx.ui.test.junit4)
+    testImplementation(libs.robolectric)
+}
+
+tasks.withType<Test>().configureEach {
+    // Robolectric's PixelCopy renders the real view hierarchy into the bitmap. Without this the
+    // capture silently falls back to an empty buffer and `captureToImage()` times out.
+    systemProperty("robolectric.pixelCopyRenderMode", "hardware")
+    systemProperty("robolectric.graphicsMode", "NATIVE")
 }
