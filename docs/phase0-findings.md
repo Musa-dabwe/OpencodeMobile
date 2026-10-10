@@ -74,7 +74,9 @@ Device: OPPO Reno 3 (PCLM50), Android 12, SDK 31, arm64-v8a.
 
 ### Verified working
 
-- proot executes **from the app's own sandbox** (`filesDir`), not just /data/local/tmp.
+- proot executes, but **NOT from `filesDir`**. See the Task 5 correction below: the app
+  cannot `execve()` its own home directory, so proot ships in `jniLibs` and runs from
+  `nativeLibraryDir`. The original claim here was true of a `run-as` probe, not of the app.
 - Alpine 3.21.3 aarch64 minirootfs unpacks and boots; `/bin/sh`, busybox, `uname` work.
 - `/etc/resolv.conf` must be written by us — it is absent from the minirootfs.
 - DNS resolves (dl-cdn.alpinelinux.org → 151.101.2.132).
@@ -127,3 +129,79 @@ Device: OPPO Reno 3 (PCLM50), Android 12, SDK 31, arm64-v8a.
   `[VERIFY]` per spec §3.2. We now have a working Alpine environment to test it in.
 - PTY WebSocket from the Android client.
 - opencode theme token extraction.
+
+---
+
+## Part 3 — Phase 2 corrections (Task 5, verified on the Reno 3)
+
+Three findings here were wrong, or right for the wrong reason. Each was found by running the
+real app on the device, not by reading the code.
+
+### 1. proot CANNOT be exec'd from `filesDir` (the old claim above was wrong)
+
+`ProcessBuilder.start()` on a binary in the app's own home directory fails with:
+
+```
+failed to spawn proot: Cannot run program ".../files/runtime/proot/proot": error=13, Permission denied
+```
+
+The same binary, with the same mode (`-rwxr-xr-x`) and the same SELinux label
+(`app_data_file`), runs fine under `adb shell run-as`. That asymmetry is the whole tell:
+`run-as` sits in a different domain, and the platform refuses `execve()` of an app's home
+directory for apps targeting API 29+. **Part 2's "proot executes from the app's own sandbox"
+was an over-read of a `run-as` probe** — the same class of mistake as item 7 in that list.
+
+The fix, and what it costs:
+
+- proot and its loader ship in `jniLibs/arm64-v8a/` as `libproot.so` and `libprootloader.so`.
+  265 KB in the APK, against an 89 MB artifact that still downloads on first run.
+- `android:extractNativeLibs="true"` is REQUIRED. API 30+ otherwise loads `.so` straight out
+  of the APK and leaves `nativeLibraryDir` **empty**, so there is nothing to execute.
+- `nativeLibraryDir` is `system`-owned and **not app-writable** (`Permission denied` on
+  `mkdir`/`touch`/`cp` as the app), so copying at setup time is not an option. Shipping the
+  file is the only route in.
+- The two shared libraries (`libtalloc.so.2`, `libandroid-shmem.so`) are **dlopen'd** via
+  `LD_LIBRARY_PATH`, never executed, so they stay in `filesDir/runtime/proot`. Only the two
+  binaries that are executed have to move.
+
+### 2. On v2, the health route is the INVERSE of what v1 showed
+
+Measured against the real v2.0.22 binary with HTTP Basic auth (`opencode` / generated password):
+
+| Route | v1.18.34 (what the notes said) | v2.0.22 (measured) |
+| --- | --- | --- |
+| `GET /api/health` | `{"healthy":true}` | **404, empty body** |
+| `GET /api/info` | did not exist; SPA `index.html` | **200** `{"version":"2.0.22","pid":…,"urls":[…],"paths":{…}}` |
+
+Unauthenticated, `/api/health` returns 401 (it sits behind the auth middleware) and
+`/api/info` returns 200 with the SPA's HTML — which is exactly why the v1 warning existed and
+why a status-only probe is unsafe.
+
+The client now probes `/api/health` first and falls back to `/api/info` **only** on a 404. The
+SPA failure mode is closed structurally rather than by trusting the route name: the body is
+decoded into `ServerInfo`, whose `version` is non-null, so HTML throws during deserialisation.
+A 200 is never sufficient on its own. The real response is captured in `docs/samples/info.json`.
+
+**Generalisation: every API shape in Part 2 was verified against v1.18.34. Treat all of them
+as unverified for v2 until measured against the real binary.**
+
+### 3. The child environment being INHERITED (Task 4's judgement call) works
+
+Task 4 flagged "inherit with six keys overwritten" as never device-verified. It is now verified:
+with `PROOT_LOADER`, `LD_LIBRARY_PATH`, `PATH`, `HOME`, `TMPDIR` and `OPENCODE_SERVER_PASSWORD`
+overwritten on an inherited environment, the server starts and serves. Replacing the
+environment wholesale was **not** needed and was not tried.
+
+Two harmless warnings appear at startup and are not failures:
+
+```
+proot warning: can't canonicalize /data/data/com.termux/files/usr/tmp/: No such file or directory
+proot warning: Unable to create temp directory for f2fs bug probe: No such file or directory
+```
+
+### 4. Server death could not be forced from outside the app
+
+`adb shell run-as ... kill -9 <server pid>` fails with `Permission denied`: `runas_app` cannot
+signal processes in the app's own domain. So the `ServerState.Dead` UI path could not be forced
+from adb. What *was* verified is the in-app kill path — after a force-stop and relaunch the app
+reaped the orphan and picked a new port (38579 -> 40075), so the old port was genuinely freed.

@@ -92,6 +92,20 @@ it into the rootfs works and needs no index. See `docs/runtime-artifacts.md`.
 - OpenCode's config and data dirs are bind-mounted from app storage **outside** the rootfs, so rootfs reinstalls must never wipe sessions or credentials. Preserve that when touching the proot launch flags (§2.2).
 - Provider keys live in OpenCode's own data dir inside app-private storage, not in the app's Keystore. Never log them; redact in diagnostics output.
 
+## Task 5 device corrections (the two that bite hardest)
+
+- **proot cannot be exec'd from `filesDir`.** `ProcessBuilder` gets `error=13, Permission
+  denied`; the identical binary runs fine under `adb shell run-as`, which is the trap — that is
+  a different SELinux domain. proot + its loader ship in `jniLibs/arm64-v8a` and run from
+  `nativeLibraryDir`. That requires `android:extractNativeLibs="true"`, because API 30+ leaves
+  `nativeLibraryDir` empty otherwise. `nativeLibraryDir` is system-owned and not app-writable,
+  so the file has to ship. The shared libs stay in filesDir: they are dlopen'd, not executed.
+- **On v2 the health route is the inverse of the v1 findings.** `GET /api/health` is **404** on
+  v2.0.22; `GET /api/info` is the live endpoint. The client probes `/api/health` first and falls
+  back to `/api/info` only on a 404, decoding the body into a type with a non-null `version` so
+  the SPA's HTML can never pass. Every API shape below was measured on v1.18.34 and is NOT
+  proven for v2 — re-measure before trusting one.
+
 ## API facts that differ from the spec
 
 `docs/phase0-findings.md` has the evidence. The traps:
