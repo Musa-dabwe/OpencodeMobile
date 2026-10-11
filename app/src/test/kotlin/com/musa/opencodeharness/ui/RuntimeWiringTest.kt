@@ -48,6 +48,7 @@ class RuntimeWiringTest {
     private class FakeApi(
         private val sessions: List<SessionInfo> = emptyList(),
         private val error: Throwable? = null,
+        private val version: String? = null,
     ) : OpenCodeApi {
         override suspend fun health(): Health {
             error?.let { throw it }
@@ -55,6 +56,8 @@ class RuntimeWiringTest {
         }
 
         override suspend fun listSessions(): List<SessionInfo> = sessions
+
+        override suspend fun serverVersion(): String? = version
     }
 
     /** Records the endpoint the ViewModel built its client from. */
@@ -73,9 +76,12 @@ class RuntimeWiringTest {
         override val logLines: StateFlow<List<String>> = _log
         private val _death = MutableStateFlow<String?>(null)
         override val serverDeath: StateFlow<String?> = _death
+        private val _serverState = MutableStateFlow<ServerState>(ServerState.Idle)
+        override val serverState: StateFlow<ServerState> = _serverState
 
         fun publish(log: List<String>) { _log.value = log }
         fun publishDeath(reason: String) { _death.value = reason }
+        fun publishServerState(state: ServerState) { _serverState.value = state }
 
         override suspend fun run(): OpenCodeApi {
             runs++

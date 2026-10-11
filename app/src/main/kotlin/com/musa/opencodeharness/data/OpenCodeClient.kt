@@ -116,6 +116,24 @@ class OpenCodeClient(
         return Health(healthy = info.version.isNotBlank())
     }
 
+    /**
+     * The server's own version, read from `GET /api/info`.
+     *
+     * Design section 3.7 shows `v2.0.x` in the Settings card, and a hardcoded version would be a
+     * claim the app cannot back -- the binary is whatever npm resolved at install time. So it is
+     * asked for, and the same guarantee `health()` relies on applies here: the body is DECODED into
+     * [ServerInfo], whose `version` is non-null, so an HTML catch-all response throws during
+     * deserialisation rather than being read as a version.
+     *
+     * Returns the raw string; the caller decides how to render it (the card prefixes a `v`). A blank
+     * version is reported as null rather than as an empty string, so "unknown" and "empty" collapse
+     * to the same honest answer: no version segment at all.
+     */
+    override suspend fun serverVersion(): String? {
+        val info = call { http.get("$base/api/info").body<ServerInfo>() }
+        return info.version.trim().takeIf { it.isNotEmpty() }
+    }
+
     override suspend fun listSessions(): List<SessionInfo> =
         call { http.get("$base/api/session").body<Envelope<SessionInfo>>().data }
 

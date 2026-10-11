@@ -152,7 +152,7 @@ class RuntimeSetup(
     override val logLines: StateFlow<List<String>> = _logLines.asStateFlow()
 
     private val _serverState = MutableStateFlow<ServerState>(ServerState.Idle)
-    val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
+    override val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
 
     private val _serverDeath = MutableStateFlow<String?>(null)
 
@@ -393,6 +393,20 @@ interface SessionRuntime {
     val step: StateFlow<SetupStep>
     val logLines: StateFlow<List<String>>
     val serverDeath: StateFlow<String?>
+
+    /**
+     * The launcher's own [ServerState], so the Settings card can be a pure function of it.
+     *
+     * Until Task 4 this field existed on [RuntimeSetup] with NO reader anywhere -- write-only in
+     * exactly the way `SessionListUiState.serverUrl` was, which the Task 3 review flagged. It is on
+     * the seam now because `ServerState.Dead` is a fact the card has to render, and
+     * `serverDeath` is not a substitute: that is one sentence, written once, never cleared until
+     * the next `run()`, so it can go stale beside a freshly spawned server.
+     *
+     * Exposing an existing field is not a behaviour change: nothing about how the launcher, the
+     * death watch or the log tail works is touched.
+     */
+    val serverState: StateFlow<ServerState>
 
     /** Runs or resumes setup and returns the client bound to the server this app started. */
     suspend fun run(): OpenCodeApi

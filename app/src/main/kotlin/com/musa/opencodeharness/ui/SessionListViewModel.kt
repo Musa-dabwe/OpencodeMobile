@@ -10,6 +10,7 @@ import com.musa.opencodeharness.data.OpenCodeApi
 import com.musa.opencodeharness.data.OpenCodeClient
 import com.musa.opencodeharness.data.SessionNode
 import com.musa.opencodeharness.data.buildSessionTree
+import com.musa.opencodeharness.data.runtime.launch.ServerState
 import com.musa.opencodeharness.data.runtime.setup.ProductionRuntime
 import com.musa.opencodeharness.data.runtime.setup.SessionRuntime
 import com.musa.opencodeharness.data.runtime.setup.SetupFailed
@@ -67,6 +68,26 @@ data class SessionListUiState(
     val serverDeath: String? = null,
     /** `127.0.0.1:<port>` of the server this app started. Null until one exists. */
     val serverUrl: String? = null,
+    /**
+     * The launcher's own view of the server process, mirrored from the runtime.
+     *
+     * This is the field the Settings card is a pure function of (see
+     * `serverCardModel`). [serverDeath] cannot replace it: that is one sentence, written once and
+     * only cleared by the next `run()`, so it can outlive the run that produced it -- while this is
+     * re-posted by the launcher on every transition.
+     *
+     * Defaults to [ServerState.Idle] so every existing construction site and test keeps working,
+     * which is the same additive-because-tested rule [logLines] follows.
+     */
+    val serverState: ServerState = ServerState.Idle,
+    /**
+     * Whatever `GET /api/info` reported, or null.
+     *
+     * NEVER a constant: the binary is whatever npm resolved at install time, so a hardcoded version
+     * would be a claim this build cannot back. Null means "nobody has told us", and the card renders
+     * no version segment rather than a placeholder.
+     */
+    val serverVersion: String? = null,
 ) {
     /**
      * True once the server answered and the list came back empty. Distinct from "still
@@ -130,6 +151,10 @@ class SessionListViewModel(
             (scope ?: viewModelScope).launch {
                 launch { rt.step.collect { s -> _state.update { it.copy(setup = s) } } }
                 launch { rt.logLines.collect { lines -> _state.update { it.copy(logLines = lines) } } }
+                // The Settings card reads this directly, so the launcher's state is mirrored rather
+                // than inferred from the connection: a process can be alive while its HTTP server is
+                // not answering, and those are two different things the card words differently.
+                launch { rt.serverState.collect { s -> _state.update { it.copy(serverState = s) } } }
                 launch {
                     rt.serverDeath.collect { reason ->
                         _state.update { it.copy(serverDeath = reason) }
@@ -154,7 +179,10 @@ class SessionListViewModel(
 
     /** Re-runs setup + health + session load. Wired to the retry action on the unreachable state. */
     fun load() {
-        _state.update { it.copy(connection = ConnectionState.Connecting) }
+        // The version is cleared BEFORE the probe: it belongs to the server that answered last time,
+        // and carrying it across a reload would put a stale version beside a server that is still
+        // starting. It comes straight back if the probe succeeds.
+        _state.update { it.copy(connection = ConnectionState.Connecting, serverVersion = null) }
         (scope ?: viewModelScope).launch {
             val client = resolveApi() ?: return@launch
 
@@ -177,6 +205,18 @@ class SessionListViewModel(
                 return@launch
             }
 
+            // Read the version off the same live server the session list is about to come from.
+            // A failure here is NOT fatal to the load: the list is still worth showing, and the card
+            // simply renders no version segment. Only cancellation propagates.
+            val version = try {
+                client.serverVersion()
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Throwable) {
+                null
+            }
+            if (version != null) _state.update { it.copy(serverVersion = version) }
+
             val sessions = try {
                 client.listSessions()
             } catch (cancellation: CancellationException) {
@@ -197,6 +237,36 @@ class SessionListViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Restarts the server: drops the client this ViewModel is holding and runs setup again.
+     *
+     * ## Why this is not just [load]
+     *
+     * [load] re-probes the server it already has, which is right for "the network blipped" and wrong
+     * for "the server is gone": [resolveApi] caches its client, so a plain [load] after a death would
+     * health-probe a port nothing is listening on and report Unreachable forever, with no new process
+     * ever spawned. That is exactly the shape of a `Restart` button that does not restart.
+     *
+     * Releasing the cached client is what makes the next [resolveApi] fall through to
+     * `SessionRuntime.run()`, which starts a genuine new server. The old client owns an OkHttp
+     * engine, so it is closed here rather than leaked -- the same ordering `onCleared` uses.
+     *
+     * Double-tapping is safe: [load] is not guarded here, but `RuntimeSetup.run()` holds a `Mutex` and
+     * `ProotLauncher.start()` is synchronized and refuses to start a second server, so a second tap
+     * joins the first run instead of racing it.
+     */
+    fun restart() {
+        val previous = activeCloseable
+        activeApi = null
+        activeCloseable = null
+        try {
+            previous?.close()
+        } catch (ignored: Exception) {
+            // Releasing the old engine must never stop the restart that replaces it.
+        }
+        load()
     }
 
     /**

@@ -59,6 +59,7 @@ import com.musa.opencodeharness.data.model.Location
 import com.musa.opencodeharness.data.model.SessionInfo
 import com.musa.opencodeharness.data.model.SessionTime
 import com.musa.opencodeharness.ui.isSubAgentSession
+import com.musa.opencodeharness.ui.wiredOrDisabled
 import com.musa.opencodeharness.ui.theme.Hairline
 import com.musa.opencodeharness.ui.theme.OpenCodeMobileTheme
 import com.musa.opencodeharness.ui.theme.TypeRole
@@ -309,26 +310,6 @@ private fun ScopePill(
         )
     }
 }
-
-/**
- * Wires a control, or marks it disabled -- never a click that goes nowhere.
- *
- * ## Why `null` and not `{}`
- *
- * A defaulted `{}` callback is indistinguishable from a wired one at the call site, which is how
- * the shipped screen ended up with a solid-accent FAB that did nothing: `SessionListScreen` calls
- * `SessionsScreen(roots, modifier)` and every action silently became a no-op. `null` means "this
- * action does not exist yet", and it produces a visibly inert control instead.
- *
- * `mergeDescendants = true` keeps the child's text on the same semantics node, so a disabled
- * control is still announced as "This project" rather than as an unlabelled box.
- */
-private fun Modifier.wiredOrDisabled(onClick: (() -> Unit)?): Modifier =
-    if (onClick != null) {
-        clickable(onClick = onClick)
-    } else {
-        semantics(mergeDescendants = true) { disabled() }
-    }
 
 // --- search -------------------------------------------------------------------------------------
 

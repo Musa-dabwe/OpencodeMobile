@@ -17,6 +17,7 @@ import com.musa.opencodeharness.ui.SessionListViewModel
 import com.musa.opencodeharness.ui.nav.AppShell
 import com.musa.opencodeharness.ui.nav.NavTab
 import com.musa.opencodeharness.ui.nav.PlaceholderDestination
+import com.musa.opencodeharness.ui.settings.SettingsScreen
 import com.musa.opencodeharness.ui.theme.OpenCodeMobileTheme
 import androidx.lifecycle.lifecycleScope
 import java.io.File
@@ -74,6 +75,13 @@ class MainActivity : ComponentActivity() {
                         NavTab.CHAT -> SessionListScreen(
                             state = state,
                             onRetry = viewModel::load,
+                        )
+                        // Design section 3.7, plus the runtime log Task 4 relocated here. The card
+                        // is driven by `state.serverState`, so it renders Running, Starting, Dead
+                        // and Unreachable honestly rather than assuming the happy path.
+                        NavTab.SETTINGS -> SettingsScreen(
+                            state = state,
+                            onRestart = viewModel::restart,
                         )
                         // Honest placeholders. No invented rows, no fake "you have no projects".
                         else -> PlaceholderDestination(destination)

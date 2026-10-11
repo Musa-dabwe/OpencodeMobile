@@ -1,6 +1,7 @@
 package com.musa.opencodeharness.ui.nav
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -38,6 +39,7 @@ import org.robolectric.annotation.Config
 
 internal const val PROBE_FIELD = "probe:field"
 internal const val PROBE_LIST = "probe:list"
+internal const val SETTINGS_PROBE = "probe:settings"
 
 /**
  * The shell: six destinations, honest placeholders, and -- the reason this class exists -- state
@@ -274,19 +276,34 @@ class AppShellTest {
     }
 
     /**
-     * The mutation this catches: routing Chat to `PlaceholderDestination` because a `when` got
-     * reordered -- which would leave the app's one real screen unreachable with nothing failing.
+     * The mutation this catches: routing a real destination to `PlaceholderDestination` because a
+     * `when` got reordered -- which would leave the app's screens unreachable with nothing failing.
+     *
+     * Driven off `NavTab.Content` rather than a hardcoded tab list, so the assertion and the
+     * declaration cannot drift apart: whatever the enum calls `IMPLEMENTED` must render real content,
+     * and whatever it calls `NOT_BUILT` must render the honest placeholder and nothing else.
      */
     @Test
-    fun chatIsTheOnlyDestinationThatIsNotAPlaceholder() {
+    fun everyImplementedDestinationRendersContentAndEveryOtherOneIsAPlaceholder() {
         rule.setContent { Shell() }
+
+        // One IMPLEMENTED destination at a time: `AppShell` composes only the selected tab, so each
+        // probe has to be reached by selecting it rather than assumed to be on screen.
         rule.onNodeWithTag(PROBE_FIELD).assertExists()
+        rule.onNodeWithTag(SETTINGS_PROBE).assertDoesNotExist()
         rule.onNodeWithText(NOT_BUILT_LABEL).assertDoesNotExist()
 
-        for (tab in NavTab.order - NavTab.CHAT) {
+        rule.onNodeWithTag(navBarTestTag(NavTab.SETTINGS)).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag(SETTINGS_PROBE).assertExists()
+        rule.onNodeWithTag(PROBE_FIELD).assertDoesNotExist()
+        rule.onNodeWithText(NOT_BUILT_LABEL).assertDoesNotExist()
+
+        for (tab in NavTab.order.filter { it.content == NavTab.Content.NOT_BUILT }) {
             rule.onNodeWithTag(navBarTestTag(tab)).performClick()
             rule.waitForIdle()
             rule.onNodeWithTag(PROBE_FIELD).assertDoesNotExist()
+            rule.onNodeWithTag(SETTINGS_PROBE).assertDoesNotExist()
             rule.onNodeWithText(NOT_BUILT_LABEL).assertExists()
             // The screen's own heading, not the bar's label of the same text.
             rule.onNodeWithTag(PLACEHOLDER_TITLE_TAG).assertTextEquals(tab.label)
@@ -322,6 +339,10 @@ class AppShellTest {
                         onValueChange = {},
                         modifier = Modifier.testTag(PROBE_FIELD),
                     )
+                    // Mirrors production's `when`: a destination with content routes to it, and
+                    // everything else to the placeholder. A harness that routed Settings to the
+                    // placeholder would make the routing test below prove nothing.
+                    NavTab.SETTINGS -> Box(Modifier.fillMaxSize().testTag(SETTINGS_PROBE))
                     else -> PlaceholderDestination(destination)
                 }
             }

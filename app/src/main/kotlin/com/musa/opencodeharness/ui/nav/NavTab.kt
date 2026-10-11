@@ -52,8 +52,11 @@ enum class NavTab(
     /** Spec section 5.9, inserted before Settings because the design treats it as a root. */
     AGENTS(route = "agents", label = "Agents", icon = NavIcons.Agents, content = Content.NOT_BUILT),
 
-    /** Registered now so the bar matches the design; the screen lands in Task 4. */
-    SETTINGS(route = "settings", label = "Settings", icon = NavIcons.Settings, content = Content.NOT_BUILT),
+    /**
+     * Design section 3.7. Real from Task 4: the server card is a pure function of the launcher's
+     * `ServerState`, and the grouped rows are either derived from real state or honestly disabled.
+     */
+    SETTINGS(route = "settings", label = "Settings", icon = NavIcons.Settings, content = Content.IMPLEMENTED),
     ;
 
     enum class Content { IMPLEMENTED, NOT_BUILT }

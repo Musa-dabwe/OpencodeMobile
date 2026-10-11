@@ -56,17 +56,21 @@ class NavTabOrderTest {
      * The mutation this catches: shipping a placeholder as though it were a screen, or -- worse --
      * rendering a destination with real content that it has no data source for.
      *
-     * Chat is the only destination with a data source in this phase. Everything else renders
-     * `PlaceholderDestination`, which asserts out loud that it is not built.
+     * Chat (Task 3) and Settings (Task 4) are the two destinations with a data source: the session
+     * tree the launcher started the server for, and that same launcher's `ServerState`. Everything
+     * else renders `PlaceholderDestination`, which asserts out loud that it is not built.
+     *
+     * The list is written out in full rather than derived, so a destination that silently gains or
+     * loses its content state fails HERE instead of being absorbed by a computed expectation.
      */
     @Test
-    fun onlyChatHasRealContent() {
+    fun exactlyChatAndSettingsHaveRealContent() {
         assertEquals(
-            listOf(NavTab.CHAT),
+            listOf(NavTab.CHAT, NavTab.SETTINGS),
             NavTab.order.filter { it.content == NavTab.Content.IMPLEMENTED },
         )
         assertEquals(
-            listOf(NavTab.PROJECTS, NavTab.FILES, NavTab.TERMINAL, NavTab.AGENTS, NavTab.SETTINGS),
+            listOf(NavTab.PROJECTS, NavTab.FILES, NavTab.TERMINAL, NavTab.AGENTS),
             NavTab.order.filter { it.content == NavTab.Content.NOT_BUILT },
         )
     }
