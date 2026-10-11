@@ -1,15 +1,25 @@
 package com.musa.opencodeharness.ui.sessions
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
@@ -26,6 +36,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import androidx.compose.ui.unit.dp
 
 /**
  * The design's Sessions screen, driven for real at the design's own 393dp baseline.
@@ -80,6 +91,42 @@ class SessionsScreenTest {
 
     private fun show(roots: List<com.musa.opencodeharness.data.SessionNode>) = rule.setContent {
         OpenCodeMobileTheme { SessionsScreen(roots = roots, nowMillis = now) }
+    }
+
+    /**
+     * The same screen, preceded by a second focusable input the test can park focus on.
+     *
+     * WHY this exists: under Robolectric the search field starts FOCUSED, so "the field is focused
+     * after I tapped it" passed even with the container's click removed -- a mutation run proved
+     * it. The assertion has to be a TRANSITION: focus starts somewhere else, a tap on the field's
+     * padding moves it here. Only that can fail.
+     */
+    private fun showWithAFocusProbe() = rule.setContent {
+        OpenCodeMobileTheme {
+            Column(modifier = Modifier.fillMaxSize()) {
+                BasicTextField(
+                    value = "",
+                    onValueChange = {},
+                    singleLine = true,
+                    modifier = Modifier.testTag(FOCUS_PROBE_TAG),
+                )
+                Box(modifier = Modifier.weight(1f)) {
+                    SessionsScreen(roots = tree, nowMillis = now)
+                }
+            }
+        }
+    }
+
+    /** Puts focus on the probe input and asserts it took: the precondition for the tests below. */
+    private fun parkFocusOnTheProbe() {
+        val probe = rule.onNodeWithTag(FOCUS_PROBE_TAG)
+        probe.performTouchInput { click(center) }
+        rule.onNodeWithTag(FOCUS_PROBE_TAG).assertIsFocused()
+    }
+
+    private companion object {
+        /** Test hook: a second focusable input, so focus can be observed MOVING. */
+        const val FOCUS_PROBE_TAG = "test:focusProbe"
     }
 
     // --- the header and the controls the design names --------------------------------------------
@@ -400,6 +447,129 @@ class SessionsScreenTest {
         rule.setContent { OpenCodeMobileTheme { SessionsScreen(roots = emptyList(), nowMillis = now) } }
 
         rule.onNodeWithTag(EMPTY_MESSAGE_TAG).assertTextEquals(NO_SESSIONS_MESSAGE)
+    }
+
+    // --- touch targets ---------------------------------------------------------------------------
+
+    /**
+     * The screen's own floor, resolved from the density this test actually renders at.
+     *
+     * Never a hardcoded pixel count: at xhdpi 48dp is 96px, and a test that said "96" would pass
+     * for the wrong reason on a different qualifier.
+     */
+    private val minTouchTargetPx: Float get() = with(rule.density) { MIN_TOUCH_TARGET.toPx() }
+
+    /** Spec §7.5's minimum, the same value the bottom bar is held to. */
+    private val MIN_TOUCH_TARGET = 48.dp
+
+    /**
+     * The visible search field is a 48dp target, not just the text line inside it.
+     *
+     * Measured under Robolectric before the fix: the `BasicTextField` measured 311.0 x 17.5dp
+     * inside a visible 46dp field, so ~13dp above and ~12dp below the text did nothing at all.
+     *
+     * Mutation caught: `SearchHeight` back to 46dp, or sizing this from the inner field node
+     * instead of the field capsule.
+     */
+    @Test
+    fun theSearchFieldsVisibleHeightIsAMinimumTouchTarget() {
+        show()
+
+        val bounds = rule.onNodeWithTag(SESSIONS_SEARCH_FIELD_TAG).fetchSemanticsNode().boundsInRoot
+
+        assertTrue(
+            "the visible search field is ${bounds.height}px tall, needs at least " +
+                "${minTouchTargetPx}px (${MIN_TOUCH_TARGET})",
+            bounds.height >= minTouchTargetPx,
+        )
+    }
+
+    /**
+     * The click target is the whole visible field, not the text line inside it -- and invoking it
+     * really does hand focus to the input.
+     *
+     * ## Why this does not use a synthetic touch
+     *
+     * A raw `performTouchInput { click(...) }` does not reach `Modifier.clickable` on this node
+     * under Robolectric -- proven with a throwaway probe, not assumed. A test built on it is
+     * theatre: an earlier version of this test passed with the container's `clickable` deleted,
+     * because the injected offset was node-relative where `TouchInjectionScope.click(position)`
+     * expects root coordinates, and then because the search field starts focused anyway.
+     * `performClick()` invokes the node's real `OnClick` semantics action -- the very handler a
+     * finger reaches -- so the behavioural half is measured on the thing that actually fires.
+     *
+     * Three claims, each broken by a different regression:
+     *
+     *  1. The full-height node carries the click action at all. Removing the container `clickable`,
+     *     or moving it back onto the inner text field, makes `assertHasClickAction` throw on THIS
+     *     node.
+     *  2. That node extends strictly ABOVE and BELOW the text line -- the review's measured
+     *     "~13dp top and ~12dp bottom do nothing".
+     *  3. Invoking it moves focus off a competing field and onto the search input, so focus
+     *     forwarding is proven rather than assumed. The competing field is there precisely because
+     *     the search field starts focused under Robolectric.
+     */
+    @Test
+    fun theWholeVisibleSearchFieldIsTheClickTargetNotOnlyTheTextLine() {
+        showWithAFocusProbe()
+        parkFocusOnTheProbe()
+
+        val field = rule.onNodeWithTag(SESSIONS_SEARCH_FIELD_TAG)
+        val fieldBounds = field.fetchSemanticsNode().boundsInRoot
+        val textBounds = rule.onNodeWithTag(SESSIONS_SEARCH_TAG).fetchSemanticsNode().boundsInRoot
+
+        field.assertHasClickAction()
+
+        assertTrue(
+            "the tap target must start above the text line, or the top padding is dead " +
+                "(target top ${fieldBounds.top}, text top ${textBounds.top})",
+            fieldBounds.top < textBounds.top,
+        )
+        assertTrue(
+            "the tap target must end below the text line, or the bottom padding is dead " +
+                "(target bottom ${fieldBounds.bottom}, text bottom ${textBounds.bottom})",
+            fieldBounds.bottom > textBounds.bottom,
+        )
+
+        field.performClick()
+
+        rule.onNodeWithTag(SESSIONS_SEARCH_TAG).assertIsFocused()
+        rule.onNodeWithTag(FOCUS_PROBE_TAG).assertIsNotFocused()
+    }
+
+    /**
+     * The scope pill is a 48dp target around a 28dp drawn capsule.
+     *
+     * Measured under Robolectric before the fix: 92.0 x 28.0dp -- 20dp under the floor, with the
+     * pill's own outline and padding doing nothing for the tap.
+     *
+     * The drawn pill is deliberately NOT grown (the design's appearance is unchanged), so this
+     * asserts the TARGET node, which is what a finger actually has to hit.
+     *
+     * Mutation caught: dropping `defaultMinSize(minHeight = MinTouchTarget)`, or moving the tag
+     * back onto the inner `Text`.
+     */
+    @Test
+    fun theScopePillIsAMinimumTouchTarget() {
+        show()
+
+        val bounds = rule.onNodeWithTag(SESSIONS_SCOPE_TAG).fetchSemanticsNode().boundsInRoot
+
+        assertTrue(
+            "the scope pill's tap target is ${bounds.height}px tall, needs at least " +
+                "${minTouchTargetPx}px (${MIN_TOUCH_TARGET})",
+            bounds.height >= minTouchTargetPx,
+        )
+    }
+
+    /** The back chevron already met the floor; this pins it so a later edit cannot quietly regress. */
+    @Test
+    fun theBackChevronIsAMinimumTouchTarget() {
+        show()
+
+        val bounds = rule.onNodeWithTag(SESSIONS_BACK_TAG).fetchSemanticsNode().boundsInRoot
+
+        assertTrue("the back chevron is ${bounds.height}px tall", bounds.height >= minTouchTargetPx)
     }
 
     // --- swipe actions ---------------------------------------------------------------------------

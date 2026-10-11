@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -72,6 +75,15 @@ internal const val SESSIONS_SCOPE_TAG = "sessions:scope"
 
 /** Test hook: the search input. */
 internal const val SESSIONS_SEARCH_TAG = "sessions:search"
+
+/**
+ * Test hook: the search field's full visible surface, not just the text line inside it.
+ *
+ * The two are deliberately different nodes. `sessions:search` is the 17.5dp-tall `BasicTextField`;
+ * this is the 48dp capsule the user sees, which is the one that has to be tappable over its whole
+ * height. Measuring the inner node would report the bug rather than catch it.
+ */
+internal const val SESSIONS_SEARCH_FIELD_TAG = "sessions:searchField"
 
 /** Test hook: the search field's placeholder. */
 internal const val SESSIONS_SEARCH_PLACEHOLDER = "Search sessions"
@@ -242,6 +254,15 @@ internal const val SCOPE_THIS_PROJECT = "This project"
  *
  * Outline rather than a fill on purpose -- a filled accent pill would be a second primary action
  * competing with the FAB. See [sessionsStyle].
+ *
+ * ## Why the drawn pill and the tappable box are two different things
+ *
+ * The text alone measures 92x28dp: a 28dp touch target, 20dp under the 48dp floor, with dead
+ * space either side of it. Adding `defaultMinSize` to the `Text` itself would have grown the
+ * DRAWN capsule to 48dp and changed the design's appearance. So the click target is an outer `Box`
+ * that fills the 48dp minimum and centres the pill inside it: the pill keeps its exact 28dp visual
+ * padding, and the 10dp above and below it stop being dead. The outer box also centres the text
+ * in the target instead of leaving it stranded at the top.
  */
 @Composable
 private fun ScopePill(
@@ -250,18 +271,24 @@ private fun ScopePill(
     labelStyle: TextStyle,
     onClick: () -> Unit,
 ) {
-    Text(
-        text = label,
-        style = labelStyle,
-        color = style.pillText,
-        maxLines = 1,
+    Box(
         modifier = Modifier
             .testTag(SESSIONS_SCOPE_TAG)
-            .clickable(onClick = onClick)
-            .background(style.searchFill, RoundedCornerShape(CapsuleRadius))
-            .border(1.dp, style.pillOutline, RoundedCornerShape(CapsuleRadius))
-            .padding(horizontal = 14.dp, vertical = 7.dp),
-    )
+            .defaultMinSize(minHeight = MinTouchTarget)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = labelStyle,
+            color = style.pillText,
+            maxLines = 1,
+            modifier = Modifier
+                .background(style.searchFill, RoundedCornerShape(CapsuleRadius))
+                .border(1.dp, style.pillOutline, RoundedCornerShape(CapsuleRadius))
+                .padding(horizontal = 14.dp, vertical = 7.dp),
+        )
+    }
 }
 
 // --- search -------------------------------------------------------------------------------------
@@ -281,13 +308,21 @@ private fun SessionsSearchField(
     style: SessionsStyle,
     textStyle: TextStyle,
 ) {
+    // The click target is the whole visible capsule; the field is what it focuses. The inner
+    // `BasicTextField` handles its own taps, so putting `clickable` here costs it nothing and
+    // makes the ~13dp above and ~12dp below the text line tappable instead of dead.
+    val focusRequester = remember { FocusRequester() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = style.screenMargin, vertical = 4.dp)
             .height(SearchHeight)
+            .testTag(SESSIONS_SEARCH_FIELD_TAG)
             .background(style.searchFill, RoundedCornerShape(SearchRadius))
             .border(1.dp, style.searchOutline, RoundedCornerShape(SearchRadius))
+            // No ripple: this design has no ripple colour, and a ripple would be the one accent
+            // surface on a control that is not the primary action.
+            .clickable(interactionSource = null, indication = null) { focusRequester.requestFocus() }
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -308,7 +343,10 @@ private fun SessionsSearchField(
                 singleLine = true,
                 textStyle = textStyle.copy(color = style.rowTitle),
                 cursorBrush = SolidColor(style.pillText),
-                modifier = Modifier.fillMaxWidth().testTag(SESSIONS_SEARCH_TAG),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .testTag(SESSIONS_SEARCH_TAG),
             )
         }
     }
@@ -770,8 +808,13 @@ private val NestedIndent: Dp = 16.dp
 /** The design's search field: `surface` fill, ~12dp radius. */
 private val SearchRadius: Dp = 12.dp
 
-/** The search field's height: comfortably over the 48dp touch target once padded. */
-private val SearchHeight: Dp = 46.dp
+/**
+ * The search field's height: the 48dp minimum touch target, exactly.
+ *
+ * It was 46dp, which was under the floor even before the padding inside it stopped being tappable.
+ * At xhdpi that is 92px, and `SessionsScreenTest` asserts the rendered height, not this constant.
+ */
+private val SearchHeight: Dp = MinTouchTarget
 
 /** Full-capsule radius, the design's shape for pills and primary buttons. */
 private val CapsuleRadius: Dp = 50.dp
