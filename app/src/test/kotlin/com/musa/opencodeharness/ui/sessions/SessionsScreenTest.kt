@@ -13,7 +13,9 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -101,6 +103,29 @@ class SessionsScreenTest {
      * it. The assertion has to be a TRANSITION: focus starts somewhere else, a tap on the field's
      * padding moves it here. Only that can fail.
      */
+    /**
+     * The screen with every action wired -- the shape a later task produces.
+     *
+     * `show()` deliberately leaves them all null, because that is what
+     * `SessionListScreen` does in production today.
+     */
+    private fun showWired() = rule.setContent {
+        OpenCodeMobileTheme {
+            SessionsScreen(
+                roots = tree,
+                nowMillis = now,
+                onToggleScope = { wired["scope"] = true },
+                onBack = { wired["back"] = true },
+                onNewSession = { wired["new"] = true },
+                onRename = { wired["rename"] = it },
+                onDelete = { wired["delete"] = it },
+            )
+        }
+    }
+
+    /** What the wired callbacks recorded, so "it fires" is asserted rather than assumed. */
+    private val wired = mutableMapOf<String, Any>()
+
     private fun showWithAFocusProbe() = rule.setContent {
         OpenCodeMobileTheme {
             Column(modifier = Modifier.fillMaxSize()) {
@@ -582,7 +607,7 @@ class SessionsScreenTest {
      */
     @Test
     fun swipingARowRevealsRenameAndDelete() {
-        show()
+        showWired()
 
         rule.onNodeWithTag(sessionsRowTag("ses_root")).performTouchInput { swipeLeft() }
         rule.waitForIdle()
@@ -601,7 +626,7 @@ class SessionsScreenTest {
      */
     @Test
     fun renameIsTheLeadingActionAndDeleteTheTrailingOne() {
-        show()
+        showWired()
 
         rule.onNodeWithTag(sessionsRowTag("ses_root")).performTouchInput { swipeLeft() }
         rule.waitForIdle()
@@ -620,12 +645,104 @@ class SessionsScreenTest {
      */
     @Test
     fun subAgentRowsAreSwipeableToo() {
-        show()
+        showWired()
 
         rule.onNodeWithTag(sessionsRowTag("ses_child")).performTouchInput { swipeLeft() }
         rule.waitForIdle()
 
         rule.onNodeWithTag(SESSIONS_RENAME_TAG).assertExists()
+    }
+
+    // --- the screen must not ship a promise it cannot keep ---------------------------------------
+
+    /**
+     * An inert FAB is DISABLED, and stays disabled in the semantics a test (and TalkBack) sees.
+     *
+     * `SessionListScreen` calls `SessionsScreen(roots, modifier)` with no `onNewSession`, so this is
+     * the production shape. The shipped bug was a solid-accent FAB whose click went nowhere.
+     *
+     * Mutation caught: `Modifier.clickable { }` on a null callback, or dropping `disabled()`.
+     */
+    @Test
+    fun anUnwiredFabIsDisabled() {
+        show()
+
+        rule.onNodeWithTag(SESSIONS_FAB_TAG).assertIsNotEnabled()
+    }
+
+    /** The scope pill must not read as a working filter. Mutation caught: clickable on null. */
+    @Test
+    fun anUnwiredScopePillIsDisabled() {
+        show()
+
+        rule.onNodeWithTag(SESSIONS_SCOPE_TAG).assertIsNotEnabled()
+    }
+
+    /** `onBack` is in the same position -- the wrapper never wires it either. */
+    @Test
+    fun anUnwiredBackChevronIsDisabled() {
+        show()
+
+        rule.onNodeWithTag(SESSIONS_BACK_TAG).assertIsNotEnabled()
+    }
+
+    /**
+     * A wired FAB is enabled AND fires. The other half of the pair above: without this, "mark
+     * everything disabled" would pass forever while the screen quietly stopped working.
+     *
+     * Mutation caught: the FAB dropping its `clickable` even when a callback IS supplied.
+     */
+    @Test
+    fun aWiredFabIsEnabledAndFires() {
+        showWired()
+
+        rule.onNodeWithTag(SESSIONS_FAB_TAG).assertIsEnabled().performClick()
+
+        assertEquals("the wired FAB must actually reach its callback", true, wired["new"])
+    }
+
+    /** The pill, same both ways. */
+    @Test
+    fun aWiredScopePillIsEnabledAndFires() {
+        showWired()
+
+        rule.onNodeWithTag(SESSIONS_SCOPE_TAG).assertIsEnabled().performClick()
+
+        assertEquals("the wired pill must actually reach its callback", true, wired["scope"])
+    }
+
+    /**
+     * An unwired row does not swipe at all -- no gesture, no revealed strip, no `Rename` node.
+     *
+     * A greyed-out Delete would still be a Delete, and a strip that appears and then fails is the
+     * same promise as an accent FAB that does nothing. The absence of the gesture is the honest
+     * treatment; the "is not painted in accent" half is asserted in `SessionsPixelTest`.
+     *
+     * Mutation caught: leaving `pointerInput` in place while both callbacks are null.
+     */
+    @Test
+    fun anUnwiredRowDoesNotSwipe() {
+        show()
+
+        rule.onNodeWithTag(sessionsRowTag("ses_root")).performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+
+        rule.onNodeWithTag(SESSIONS_RENAME_TAG).assertDoesNotExist()
+        rule.onNodeWithTag(SESSIONS_DELETE_TAG).assertDoesNotExist()
+        rule.onNodeWithText(RENAME_LABEL).assertDoesNotExist()
+        rule.onNodeWithText(DELETE_LABEL).assertDoesNotExist()
+    }
+
+    /** And a wired one still reaches the right id, so the absence above is not just a broken row. */
+    @Test
+    fun aWiredRowSwipeDeletesTheSwipedSession() {
+        showWired()
+
+        rule.onNodeWithTag(sessionsRowTag("ses_child")).performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+        rule.onNodeWithTag(SESSIONS_DELETE_TAG).performClick()
+
+        assertEquals("the delete action must carry the swiped row's session id", "ses_child", wired["delete"])
     }
 
     // --- matchers --------------------------------------------------------------------------------

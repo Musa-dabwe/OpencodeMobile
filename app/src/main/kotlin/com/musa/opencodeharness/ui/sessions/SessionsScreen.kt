@@ -46,6 +46,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -145,11 +146,11 @@ fun SessionsScreen(
     nowMillis: Long = System.currentTimeMillis(),
     /** The scope filter's label; the pill is a control, so its text is the caller's. */
     scopeLabel: String = SCOPE_THIS_PROJECT,
-    onToggleScope: () -> Unit = {},
-    onBack: () -> Unit = {},
-    onNewSession: () -> Unit = {},
-    onRename: (String) -> Unit = {},
-    onDelete: (String) -> Unit = {},
+    onToggleScope: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
+    onNewSession: (() -> Unit)? = null,
+    onRename: ((String) -> Unit)? = null,
+    onDelete: ((String) -> Unit)? = null,
 ) {
     val theme = MaterialTheme.openCode
     val style = theme.sessionsStyle()
@@ -198,7 +199,7 @@ fun SessionsScreen(
         NewSessionFab(
             style = style,
             labelStyle = theme.typography.textStyle(TypeRole.LABEL),
-            onClick = onNewSession,
+            onNewSession = onNewSession,
             modifier = Modifier.align(Alignment.BottomEnd).padding(style.screenMargin),
         )
     }
@@ -214,9 +215,9 @@ fun SessionsScreen(
  */
 @Composable
 private fun SessionsHeader(
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     scopeLabel: String,
-    onToggleScope: () -> Unit,
+    onToggleScope: (() -> Unit)?,
     style: SessionsStyle,
     titleStyle: TextStyle,
     labelStyle: TextStyle,
@@ -231,10 +232,15 @@ private fun SessionsHeader(
             modifier = Modifier
                 .testTag(SESSIONS_BACK_TAG)
                 .size(MinTouchTarget)
-                .clickable(onClick = onBack),
+                .wiredOrDisabled(onBack),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(BackChevron, contentDescription = "Back", tint = style.title, modifier = Modifier.size(24.dp))
+            Icon(
+                BackChevron,
+                contentDescription = "Back",
+                tint = if (onBack != null) style.title else style.meta,
+                modifier = Modifier.size(24.dp),
+            )
         }
         Spacer(Modifier.width(4.dp))
         Text(text = SCREEN_TITLE, style = titleStyle, color = style.title, maxLines = 1)
@@ -269,27 +275,50 @@ private fun ScopePill(
     label: String,
     style: SessionsStyle,
     labelStyle: TextStyle,
-    onClick: () -> Unit,
+    onToggleScope: (() -> Unit)?,
 ) {
+    val wired = onToggleScope != null
     Box(
         modifier = Modifier
             .testTag(SESSIONS_SCOPE_TAG)
             .defaultMinSize(minHeight = MinTouchTarget)
-            .clickable(onClick = onClick),
+            .wiredOrDisabled(onToggleScope),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             style = labelStyle,
-            color = style.pillText,
+            // Inert, the pill drops out of accent entirely: no accent text and no accent outline.
+            // A filter that cannot filter must not wear the colour that means "action".
+            color = if (wired) style.pillText else style.meta,
             maxLines = 1,
             modifier = Modifier
                 .background(style.searchFill, RoundedCornerShape(CapsuleRadius))
-                .border(1.dp, style.pillOutline, RoundedCornerShape(CapsuleRadius))
+                .border(1.dp, if (wired) style.pillOutline else style.searchOutline, RoundedCornerShape(CapsuleRadius))
                 .padding(horizontal = 14.dp, vertical = 7.dp),
         )
     }
 }
+
+/**
+ * Wires a control, or marks it disabled -- never a click that goes nowhere.
+ *
+ * ## Why `null` and not `{}`
+ *
+ * A defaulted `{}` callback is indistinguishable from a wired one at the call site, which is how
+ * the shipped screen ended up with a solid-accent FAB that did nothing: `SessionListScreen` calls
+ * `SessionsScreen(roots, modifier)` and every action silently became a no-op. `null` means "this
+ * action does not exist yet", and it produces a visibly inert control instead.
+ *
+ * `mergeDescendants = true` keeps the child's text on the same semantics node, so a disabled
+ * control is still announced as "This project" rather than as an unlabelled box.
+ */
+private fun Modifier.wiredOrDisabled(onClick: (() -> Unit)?): Modifier =
+    if (onClick != null) {
+        clickable(onClick = onClick)
+    } else {
+        semantics(mergeDescendants = true) { disabled() }
+    }
 
 // --- search -------------------------------------------------------------------------------------
 
@@ -378,8 +407,8 @@ private fun SessionListBody(
     rowTitleStyle: TextStyle,
     metaStyle: TextStyle,
     sectionStyle: TextStyle,
-    onRename: (String) -> Unit,
-    onDelete: (String) -> Unit,
+    onRename: ((String) -> Unit)?,
+    onDelete: ((String) -> Unit)?,
 ) {
     // Headers interleaved with rows in ONE list. Each section header appears at most once, the
     // first time a row of that section does, so a group that is entirely filtered out leaves
@@ -458,8 +487,8 @@ private fun LazyListScope.entries(
     rowTitleStyle: TextStyle,
     metaStyle: TextStyle,
     sectionStyle: TextStyle,
-    onRename: (String) -> Unit,
-    onDelete: (String) -> Unit,
+    onRename: ((String) -> Unit)?,
+    onDelete: ((String) -> Unit)?,
 ) {
     items(
         count = entries.size,
@@ -480,8 +509,8 @@ private fun LazyListScope.entries(
                 style = style,
                 rowTitleStyle = rowTitleStyle,
                 metaStyle = metaStyle,
-                onRename = { onRename(entry.row.session.id) },
-                onDelete = { onDelete(entry.row.session.id) },
+                onRename = onRename?.let { rename -> { rename(entry.row.session.id) } },
+                onDelete = onDelete?.let { delete -> { delete(entry.row.session.id) } },
             )
         }
     }
@@ -537,8 +566,8 @@ private fun SessionRow(
     style: SessionsStyle,
     rowTitleStyle: TextStyle,
     metaStyle: TextStyle,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
+    onRename: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
 ) {
     SwipeActionRow(
         style = style,
@@ -666,15 +695,21 @@ internal const val META_SEPARATOR = "·"
 @Composable
 private fun SwipeActionRow(
     style: SessionsStyle,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
+    onRename: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
     content: @Composable () -> Unit,
 ) {
     val labelColor = MaterialTheme.openCode.swipeActionLabelColor()
     val labelStyle = MaterialTheme.openCode.typography.textStyle(TypeRole.LABEL)
     var offsetX by remember { mutableFloatStateOf(0f) }
-    // How far the row can travel: the combined width of the two revealed actions.
-    val actionsWidthPx = with(LocalDensity.current) { (SwipeActionWidth * 2).toPx() }
+    // An action that is not wired is not revealed at all. There is no gesture and no node, so the
+    // row never offers a destructive-looking affordance that then fails -- the strongest form of
+    // "do not ship a promise", since a greyed-out Delete would still be a Delete.
+    val swipeable = onRename != null || onDelete != null
+    // How far the row can travel: the combined width of the actions that actually exist.
+    val actionsWidthPx = with(LocalDensity.current) {
+        ((SwipeActionWidth * (if (onRename != null) 1 else 0) + SwipeActionWidth * (if (onDelete != null) 1 else 0)).toPx())
+    }
     // The actions are COMPOSED ONLY WHILE THE ROW IS REVEALED, not painted behind every row at
     // all times. That is an accessibility decision, not an optimisation: with them always in the
     // tree, a screen reader on a five-row list announces five "Rename" and five "Delete" buttons
@@ -692,41 +727,51 @@ private fun SwipeActionRow(
                 modifier = Modifier.matchParentSize(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                SwipeActionButton(
-                    label = RENAME_LABEL,
-                    labelStyle = labelStyle,
-                    fill = style.renameFill,
-                    labelColor = labelColor,
-                    tag = SESSIONS_RENAME_TAG,
-                    onClick = { onRename(); offsetX = 0f },
-                    modifier = Modifier.width(SwipeActionWidth).fillMaxHeight(),
-                )
-                SwipeActionButton(
-                    label = DELETE_LABEL,
-                    labelStyle = labelStyle,
-                    fill = style.deleteFill,
-                    labelColor = labelColor,
-                    tag = SESSIONS_DELETE_TAG,
-                    onClick = { onDelete(); offsetX = 0f },
-                    modifier = Modifier.width(SwipeActionWidth).fillMaxHeight(),
-                )
+                onRename?.let { rename ->
+                    SwipeActionButton(
+                        label = RENAME_LABEL,
+                        labelStyle = labelStyle,
+                        fill = style.renameFill,
+                        labelColor = labelColor,
+                        tag = SESSIONS_RENAME_TAG,
+                        onClick = { rename(); offsetX = 0f },
+                        modifier = Modifier.width(SwipeActionWidth).fillMaxHeight(),
+                    )
+                }
+                onDelete?.let { delete ->
+                    SwipeActionButton(
+                        label = DELETE_LABEL,
+                        labelStyle = labelStyle,
+                        fill = style.deleteFill,
+                        labelColor = labelColor,
+                        tag = SESSIONS_DELETE_TAG,
+                        onClick = { delete(); offsetX = 0f },
+                        modifier = Modifier.width(SwipeActionWidth).fillMaxHeight(),
+                    )
+                }
             }
         }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .graphicsLayer { translationX = offsetX }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            offsetX = if (offsetX < -actionsWidthPx / 2f) -actionsWidthPx else 0f
-                        },
-                        onDragCancel = { offsetX = 0f },
-                    ) { change, dragAmount ->
-                        change.consume()
-                        offsetX = (offsetX + dragAmount).coerceIn(-actionsWidthPx, 0f)
-                    }
-                },
+                .then(
+                    if (!swipeable) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(Unit) {
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    offsetX = if (offsetX < -actionsWidthPx / 2f) -actionsWidthPx else 0f
+                                },
+                                onDragCancel = { offsetX = 0f },
+                            ) { change, dragAmount ->
+                                change.consume()
+                                offsetX = (offsetX + dragAmount).coerceIn(-actionsWidthPx, 0f)
+                            }
+                        }
+                    },
+                ),
         ) { content() }
     }
 }
@@ -763,33 +808,87 @@ internal const val DELETE_LABEL = "Delete"
 
 // --- FAB ----------------------------------------------------------------------------------------
 
-/** The `+ New session` capsule FAB, bottom-right. The screen's ONE solid-accent action. */
+/**
+ * The `+ New session` capsule FAB, bottom-right. The screen's ONE solid-accent action.
+ *
+ * ## Why an inert FAB does not wear accent
+ *
+ * The design reserves accent for "the single primary action on a screen". A primary action that
+ * cannot fire is not a primary action: it is a control that has not been built yet. So while
+ * `onNewSession` is null the FAB is painted as the DISABLED control the platform would paint --
+ * `background.raised` with a `border.subtle` hairline and the label in `text.secondary` -- and it
+ * carries disabled semantics. It keeps its position, shape and label, so the screen still shows
+ * the design's layout; what it loses is the promise.
+ *
+ * The alternative, keeping the accent fill and just dropping the click, was rejected: it is
+ * strictly worse. An accent FAB that does nothing is a live-looking control that fails on press,
+ * and it is permanently on screen. Task 2's ruling is the precedent -- a destination says "not
+ * built" rather than shipping the shape of a real thing and letting the user infer the contents.
+ */
 @Composable
 private fun NewSessionFab(
     style: SessionsStyle,
     labelStyle: TextStyle,
-    onClick: () -> Unit,
+    onNewSession: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
+    val wired = onNewSession != null
     Box(
         modifier = modifier
             // M3's FAB ships with 6dp of tonal elevation and a shadow layer; both stripped,
             // because `elevation.useShadows` is false and depth here is a hairline plus a lift.
             .noDropShadow()
             .testTag(SESSIONS_FAB_TAG)
-            .background(style.fabFill, RoundedCornerShape(CapsuleRadius))
-            .clickable(onClick = onClick)
+            .background(
+                if (wired) style.fabFill else style.searchFill,
+                RoundedCornerShape(CapsuleRadius),
+            )
+            .then(
+                if (wired) {
+                    Modifier
+                } else {
+                    // The disabled treatment keeps the design's hairline, which is this screen's
+                    // only depth cue, so the button still reads as a control and not as a smudge.
+                    Modifier
+                        .border(1.dp, style.searchOutline, RoundedCornerShape(CapsuleRadius))
+                        .semantics {
+                            disabled()
+                            contentDescription = "$NEW_SESSION_LABEL: $NOT_BUILT_A11Y"
+                        }
+                },
+            )
+            .then(if (wired) Modifier.clickable(onClick = onNewSession) else Modifier)
             .height(style.fabHeight)
             .padding(horizontal = 20.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(PlusGlyph, contentDescription = null, tint = style.fabLabel, modifier = Modifier.size(18.dp))
+            Icon(
+                PlusGlyph,
+                contentDescription = null,
+                tint = if (wired) style.fabLabel else style.meta,
+                modifier = Modifier.size(18.dp),
+            )
             Spacer(Modifier.width(6.dp))
-            Text(text = NEW_SESSION_LABEL, style = labelStyle, color = style.fabLabel, maxLines = 1)
+            Text(
+                text = NEW_SESSION_LABEL,
+                style = labelStyle,
+                color = if (wired) style.fabLabel else style.meta,
+                maxLines = 1,
+            )
         }
     }
 }
+
+/**
+ * The one honest line an inert control may carry, in the placeholder vocabulary Task 2 established.
+ *
+ * It is a `contentDescription`, so it is not new visible chrome on a screen whose layout must not
+ * change -- but a screen-reader user is told WHY the control is disabled instead of being handed
+ * an inert box. The visible treatment (no accent, no click) is the disabled-button convention,
+ * which is why nothing extra needs to be drawn.
+ */
+internal const val NOT_BUILT_A11Y = "not built yet"
 
 /** The design's FAB label. */
 internal const val NEW_SESSION_LABEL = "New session"

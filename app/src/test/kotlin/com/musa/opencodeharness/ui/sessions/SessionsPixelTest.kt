@@ -76,8 +76,39 @@ class SessionsPixelTest {
         )
     }
 
+    /**
+     * The production shape: `SessionListScreen` wires no action, so every control is inert.
+     * [showWired] is the same screen once the runtime can actually do something.
+     */
     private fun show() = rule.setContent {
         OpenCodeMobileTheme { SessionsScreen(roots = tree, nowMillis = now) }
+    }
+
+    private fun showWired() = rule.setContent {
+        OpenCodeMobileTheme {
+            SessionsScreen(
+                roots = tree,
+                nowMillis = now,
+                onToggleScope = {},
+                onBack = {},
+                onNewSession = {},
+                onRename = {},
+                onDelete = {},
+            )
+        }
+    }
+
+    /** Counts pixels of a given colour strictly inside a rectangle, skipping a 2px edge. */
+    private fun Bitmap.countIn(bounds: androidx.compose.ui.geometry.Rect, argb: Int): Pair<Int, Int> {
+        var hits = 0
+        var total = 0
+        for (y in bounds.top.toInt() + 2 until bounds.bottom.toInt() - 2) {
+            for (x in bounds.left.toInt() + 2 until bounds.right.toInt() - 2) {
+                total++
+                if (getPixel(x, y) == argb) hits++
+            }
+        }
+        return hits to total
     }
 
     /** The whole screen's pixels. Same technique as Task 2's harness: draw the decor view. */
@@ -143,29 +174,64 @@ class SessionsPixelTest {
     }
 
     /**
-     * The FAB is painted in accent, and the scope pill's accent is present as an OUTLINE.
+     * An UNWIRED FAB is painted as a disabled control: no accent anywhere inside it.
      *
-     * Mutation caught: a FAB that lost its accent fill, or a pill repainted without accent.
+     * This is the pixel half of review #6. `SessionListScreen` passes no `onNewSession`, and the
+     * shipped screen painted a solid-accent FAB regardless -- permanently on screen, doing nothing.
+     * A regression that re-lights the accent without wiring the callback paints accent here.
+     *
+     * Mutation caught: `if (wired) style.fabFill else style.searchFill` losing its condition.
      */
     @Test
-    fun theFabIsPaintedInAccent() {
+    fun anUnwiredFabIsNotPaintedInAccent() {
         show()
 
         val fabBounds = rule.onNodeWithTag(SESSIONS_FAB_TAG).fetchSemanticsNode().boundsInRoot
-        val bitmap = snapshot()
-        val scale = boundsToBitmap
-
-        val fabColours = bitmap.coloursIn(
-            (fabBounds.left * scale).roundToInt(),
-            (fabBounds.top * scale).roundToInt(),
-            (fabBounds.right * scale).roundToInt(),
-            (fabBounds.bottom * scale).roundToInt(),
-        )
+        val (accentPixels, totalPixels) = snapshot().countIn(fabBounds, theme.color.accent.base.argbInt())
 
         assertTrue(
-            "the FAB must be painted in accent.base ${theme.color.accent.base.toArgbHex()}, saw " +
-                "${fabColours.size} colours in its bounds",
-            fabColours.contains(theme.color.accent.base.argbInt()),
+            "an inert FAB must not wear accent: $accentPixels of $totalPixels interior pixels are " +
+                "accent ${theme.color.accent.base.toArgbHex()}",
+            totalPixels > 0 && accentPixels == 0,
+        )
+    }
+
+    /**
+     * A WIRED FAB is painted in accent -- the design's one primary action, when there is one.
+     *
+     * The pair of the test above. Without this, "never paint accent" would pass forever while the
+     * screen quietly lost its primary action.
+     */
+    @Test
+    fun aWiredFabIsPaintedInAccent() {
+        showWired()
+
+        val fabBounds = rule.onNodeWithTag(SESSIONS_FAB_TAG).fetchSemanticsNode().boundsInRoot
+        val (accentPixels, totalPixels) = snapshot().countIn(fabBounds, theme.color.accent.base.argbInt())
+
+        assertTrue(
+            "a wired FAB must be painted in accent.base ${theme.color.accent.base.toArgbHex()}: " +
+                "$accentPixels of $totalPixels interior pixels",
+            totalPixels > 0 && accentPixels > totalPixels / 4,
+        )
+    }
+
+    /**
+     * An UNWIRED scope pill carries no accent either -- not in its outline and not in its text.
+     *
+     * A pill that cannot filter must not wear the colour that means "action", or it reads as a
+     * working control.
+     */
+    @Test
+    fun anUnwiredScopePillIsNotPaintedInAccent() {
+        show()
+
+        val pillBounds = rule.onNodeWithTag(SESSIONS_SCOPE_TAG).fetchSemanticsNode().boundsInRoot
+        val (accentPixels, _) = snapshot().countIn(pillBounds, theme.color.accent.base.argbInt())
+
+        assertTrue(
+            "an inert scope pill must not paint accent: $accentPixels accent pixels",
+            accentPixels == 0,
         )
     }
 
@@ -222,7 +288,7 @@ class SessionsPixelTest {
      */
     @Test
     fun theScopePillIsNotPaintedAsASolidAccentFill() {
-        show()
+        showWired()
 
         val pillBounds = rule.onNodeWithTag(SESSIONS_SCOPE_TAG).fetchSemanticsNode().boundsInRoot
         val bitmap = snapshot()
@@ -260,7 +326,7 @@ class SessionsPixelTest {
      */
     @Test
     fun aRevealedSwipeActionPaintsTheDesignsActionFills() {
-        show()
+        showWired()
 
         rule.onNodeWithTag(sessionsRowTag("ses_root")).performTouchInput { swipeLeft() }
         rule.waitForIdle()
@@ -294,7 +360,7 @@ class SessionsPixelTest {
      */
     @Test
     fun theSwipeLabelIsPaintedInTextPrimaryNotTheSubAaActionColour() {
-        show()
+        showWired()
 
         rule.onNodeWithTag(sessionsRowTag("ses_root")).performTouchInput { swipeLeft() }
         rule.waitForIdle()
