@@ -10,7 +10,12 @@ import com.musa.opencodeharness.ui.theme.OpenCodeTheme
  *
  * The same shape as Task 2's `NavBarStyle` and for the same reason: it keeps every value readable
  * and assertable on a plain JVM with no composition, so a test can prove each field really comes
- * from the token it names. No hex appears here; nothing reaches for
+ * from the token it names. EVERY field here is read by a composable: `SessionsStyleTest`'s
+ * "every field comes from its token" property was previously asserting three fields nothing read
+ * (`rowGap`, `hairlineWidth`, `accent`), so those assertions could not fail. They are gone, not
+ * re-pointed at something.
+ *
+ * No hex appears here; nothing reaches for
  * `MaterialTheme.colorScheme`, because the design's roles (status dots, action fills, agent
  * colours) have no Material 3 slot to inherit and a scheme default would be a colour the design
  * does not contain.
@@ -32,7 +37,6 @@ internal data class SessionsStyle(
     val agentBlue: Color,
     /** The row separator: the 1dp `border.subtle` hairline, the design's only depth cue. */
     val hairline: Color,
-    val hairlineWidth: Dp,
     /** Swipe Rename: the action fill, with the label raised to `text.primary` for AA. See below. */
     val renameFill: Color,
     /** Swipe Delete: the design's `deleteBg` fill. */
@@ -66,9 +70,8 @@ internal data class SessionsStyle(
      * dot's meaning, so it has to be readable on its own. `text.primary` on the page is 17.5:1.
      */
     val statusWord: Color,
-    /** Screen margin, row gap, section gap: all from `spacing`. */
+    /** Screen margin and section gap: both from `spacing`. */
     val screenMargin: Dp,
-    val rowGap: Dp,
     val sectionGap: Dp,
     /** The `This project` scope pill: accent OUTLINE, accent TEXT, page fill. */
     val pillOutline: Color,
@@ -76,12 +79,17 @@ internal data class SessionsStyle(
     /** The FAB's accent fill and its dark `text.onAccent` label. */
     val fabFill: Color,
     val fabLabel: Color,
-    /** The one primary action on this screen. See `accentOwnership` for why it is the FAB. */
-    val accent: Color,
     /** Hairline outline on the search field, per design ("search field: surface fill, hairline border"). */
     val searchOutline: Color,
-    /** The FAB's capsule height, from `shape.fabHeightDp` (53dp, measured from the design). */
-    val fabHeight: Dp = 53.dp,
+    /**
+     * The FAB's capsule height, from `shape.fabHeightDp` (53dp, measured from the design).
+     *
+     * Deliberately has no default. It used to default to `53.dp` while the resolver never set it,
+     * which is how the same number ended up in three places -- this field, the composable's own
+     * constant, and the list's bottom inset. Now there is one, and a missing assignment is a
+     * compile error rather than a silent drift.
+     */
+    val fabHeight: Dp,
 )
 
 /**
@@ -114,7 +122,6 @@ internal fun OpenCodeTheme.sessionsStyle(): SessionsStyle = SessionsStyle(
     sectionHeader = color.text.sectionHeader,
     agentBlue = color.agent.primary,
     hairline = color.border.subtle,
-    hairlineWidth = elevation.dividerWidth,
     renameFill = color.action.renameBg,
     deleteFill = color.action.deleteBg,
     statusDot = color.status.idle,
@@ -123,14 +130,13 @@ internal fun OpenCodeTheme.sessionsStyle(): SessionsStyle = SessionsStyle(
     unknownDot = color.text.secondary,
     statusWord = color.text.primary,
     screenMargin = spacing.screenMargin,
-    rowGap = spacing.rowGap,
     sectionGap = spacing.sectionGap,
     pillOutline = color.accent.base,
     pillText = color.accent.base,
     fabFill = color.accent.base,
     fabLabel = color.text.onAccent,
-    accent = color.accent.base,
     searchOutline = color.border.subtle,
+    fabHeight = shape.fabHeight,
 )
 
 /**

@@ -67,9 +67,30 @@ class SessionRowModelTest {
             row.isSubAgent,
         )
         assertEquals(
-            "and it must carry the sub-agent qualifier in the meta line",
-            "sub-agent",
+            "and it must carry the sub-agent qualifier NAMING the parent it belongs to",
+            "sub-agent of ses_absent",
             row.metaSegments.first { it.emphasis == MetaEmphasis.AGENT_BLUE }.text,
+        )
+    }
+
+    /**
+     * A NESTED sub-agent names its real parent, not a constant.
+     *
+     * The review's #7: the qualifier had collapsed to the bare word "sub-agent", so the promoted
+     * orphan -- a sub-agent whose parent is not even on screen -- had nothing pointing at the
+     * session it belongs to. An indented row under nothing reads as a root.
+     *
+     * Mutation caught: `subAgentQualifier()` dropping the `parentID` suffix.
+     */
+    @Test
+    fun aSubAgentNamesTheParentItBelongsTo() {
+        val tree = buildSessionTree(listOf(session("root"), session("kid", parentID = "root")))
+
+        val child = buildSessionRows(tree, now, utc).single { it.session.id == "kid" }
+
+        assertEquals(
+            listOf("sub-agent of root"),
+            child.metaSegments.filter { it.emphasis == MetaEmphasis.AGENT_BLUE }.map { it.text },
         )
     }
 
@@ -441,14 +462,18 @@ class SessionRowModelTest {
     }
 
     /**
-     * THE accessibility rule, at the model level: every row's meta line contains a segment equal
-     * to `statusWord()`. If the status segment is ever dropped, this fails.
+     * THE accessibility rule, at the model level: every row's meta line contains exactly ONE
+     * segment with [MetaEmphasis.STATUS], and it carries the status word.
      *
-     * Mutation caught: removing the status segment from `metaSegmentsFor`, or making it optional
-     * for some row shape.
+     * If the status segment is ever dropped, this fails. If it stops being identifiable BY ROLE,
+     * this also fails -- which is the review's #8: the screen used to find it by string equality,
+     * so a project directory named `unknown` produced two matches.
+     *
+     * Mutation caught: removing the status segment, making it optional for some row shape, or
+     * tagging it `MUTED` like the ordinary segments.
      */
     @Test
-    fun everyRowCarriesTheStatusWordBesideItsDot() {
+    fun everyRowCarriesExactlyOneStatusSegmentBesideItsDot() {
         val rows = buildSessionRows(
             buildSessionTree(listOf(
                 session("root"),
@@ -460,11 +485,40 @@ class SessionRowModelTest {
         )
 
         for (row in rows) {
-            assertTrue(
-                "row ${row.session.id} has a status dot but no status word: " +
-                    "${row.metaSegments.map { it.text }}",
-                row.metaSegments.any { it.text == row.session.statusWord() },
+            val statusSegments = row.metaSegments.filter { it.emphasis == MetaEmphasis.STATUS }
+            assertEquals(
+                "row ${row.session.id} must carry exactly one status segment, got " +
+                    "${row.metaSegments.map { it.text to it.emphasis }}",
+                1,
+                statusSegments.size,
             )
+            assertEquals(row.session.statusWord(), statusSegments.single().text)
         }
+    }
+
+    /**
+     * The status segment is identifiable even when a PROJECT is also called `unknown`.
+     *
+     * This is the case the review said would throw: the old screen matched the segment by
+     * `segment.text == statusWord()`, so a session whose directory basename is literally `unknown`
+     * produced two matching segments, both got the status tag, and `onNodeWithTag` threw on the
+     * multiple matches. At the model level the fix is that `emphasis`, not the text, identifies it.
+     */
+    @Test
+    fun aProjectNamedUnknown_doesNotCollideWithTheStatusSegment() {
+        val row = buildSessionRows(
+            buildSessionTree(listOf(session("s", directory = "/home/musa/Projects/unknown"))),
+            now, utc,
+        ).single()
+
+        assertEquals(
+            "both segments really do read 'unknown' -- that is the collision",
+            listOf("unknown", "unknown"),
+            row.metaSegments.map { it.text },
+        )
+        assertEquals(
+            listOf(MetaEmphasis.MUTED, MetaEmphasis.STATUS),
+            row.metaSegments.map { it.emphasis },
+        )
     }
 }

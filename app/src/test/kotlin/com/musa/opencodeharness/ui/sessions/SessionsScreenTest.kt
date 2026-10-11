@@ -19,11 +19,14 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
@@ -232,10 +235,53 @@ class SessionsScreenTest {
 
         // The row is present...
         rule.onNodeWithTag(sessionsRowTag("ses_orphan")).assertIsDisplayed()
-        // ...and it is announced as a sub-agent, not as a root. This is the assertion that the
-        // old children-based rule would fail.
-        rule.onNodeWithTag(sessionsRowTag("ses_orphan"))
-            .assert(hasMetaSegment(SUB_AGENT_QUALIFIER))
+        // ...and it is announced as a sub-agent NAMING ITS PARENT, not as a root. Two claims in
+        // one: the qualifier is there at all (which the old children-based rule would fail), and
+        // it names `ses_absent`, the parent that is NOT on screen -- which the review's #7 says it
+        // must, because an indented row under nothing reads as a root.
+        rule.onNodeWithTag(sessionsQualifierTag("ses_orphan"))
+            .assertTextEquals("$SUB_AGENT_QUALIFIER of ses_absent")
+    }
+
+    /**
+     * A NESTED sub-agent names the parent it is visibly indented under.
+     *
+     * Mutation caught: `subAgentQualifier()` reduced to the bare constant again.
+     */
+    @Test
+    fun aNestedSubAgentNamesItsParent() {
+        show()
+
+        rule.onNodeWithTag(sessionsQualifierTag("ses_child"))
+            .assertTextEquals("$SUB_AGENT_QUALIFIER of ses_root")
+    }
+
+    /**
+     * The status word is found by ROLE, not by string equality.
+     *
+     * The review's #8: the old lookup was `segment.text == statusWord()`, so a project directory
+     * whose basename is literally `unknown` matched twice, tagged two nodes, and made
+     * `onNodeWithTag` throw on the multiple matches. This row is exactly that shape, so a
+     * regression to string matching fails HERE, loudly, rather than on a user's project name.
+     */
+    @Test
+    fun aProjectNamedUnknown_doesNotMakeTheStatusWordAmbiguous() {
+        show(
+            com.musa.opencodeharness.data.buildSessionTree(
+                listOf(
+                    session("ses_unknown", "A session in a project called unknown").copy(
+                        location = Location(directory = "/home/musa/Projects/unknown"),
+                    ),
+                ),
+            ),
+        )
+
+        // `onNodeWithTag` THROWS on more than one match, so this lookup succeeding is the
+        // assertion that exactly one segment was identified as the status word.
+        rule.onNodeWithTag(sessionsStatusWordTag("ses_unknown")).assertTextEquals("unknown")
+        // ...and the project segment really is there, with the same text, so the ambiguity this
+        // test is about genuinely existed.
+        rule.onAllNodesWithText("unknown").assertCountEquals(2)
     }
 
     /**
@@ -266,8 +312,10 @@ class SessionsScreenTest {
     fun aRootRowIsNotAnnouncedAsASubAgent() {
         show()
 
-        rule.onNodeWithTag(sessionsRowTag("ses_root"))
-            .assert(hasNoMetaSegment(SUB_AGENT_QUALIFIER))
+        // Structural: the qualifier node exists exactly when `emphasis == AGENT_BLUE`, so a root
+        // has no such node at all. The old exact-text matcher could not be used here -- a parent
+        // renders "has sub-agents", which CONTAINS "sub-agent".
+        rule.onNodeWithTag(sessionsQualifierTag("ses_root")).assertDoesNotExist()
     }
 
     /**
@@ -747,46 +795,45 @@ class SessionsScreenTest {
 
     // --- matchers --------------------------------------------------------------------------------
 
-    /**
-     * Matches a row that renders a meta segment EQUAL to the given text.
-     *
-     * Exact, not substring: a parent row renders the qualifier "has sub-agents", which CONTAINS
-     * "sub-agent". A substring matcher would therefore pass a root row for being a parent, and the
-     * test that says "a root is not a sub-agent" would prove nothing. Each meta segment is its
-     * own `Text` node, so equality on the node's text is the sharp assertion available here.
-     */
-    private fun hasMetaSegment(segment: String): SemanticsMatcher =
-        SemanticsMatcher("renders the meta segment \"$segment\"") { node ->
-            node.renderedTexts().contains(segment)
-        }
-
-    /** Matches a row that renders no meta segment equal to the given text. */
-    private fun hasNoMetaSegment(segment: String): SemanticsMatcher =
-        SemanticsMatcher("does not render the meta segment \"$segment\"") { node ->
-            !node.renderedTexts().contains(segment)
-        }
-
-    /** Every string this node and its descendants render, one entry per `Text` node. */
-    private fun SemanticsNode.renderedTexts(): List<String> = buildList {
-        addAll(config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text })
-        children.forEach { addAll(it.renderedTexts()) }
-    }
-
     // --- scrolling -------------------------------------------------------------------------------
 
     /**
-     * Every row is reachable by scrolling: a list that renders only what fits the viewport would
-     * silently hide sessions the server returned.
+     * Every row is reachable by scrolling -- and this fixture is big enough to prove it.
      *
-     * Mutation caught: a `LazyColumn` whose content is truncated, or a row with zero height.
+     * ## What was wrong with the version this replaces
+     *
+     * It asserted five rows exist. All five fit the 720dp viewport, so nothing was composed
+     * lazily, nothing was scrolled, and the test passed identically if the `LazyColumn` were
+     * replaced by anything that renders its whole input. The review's 40-row probe found 30 rows
+     * absent without scrolling -- i.e. the lazy path was exercised by nothing.
+     *
+     * ## What makes this one real
+     *
+     * The fixture is 40 root sessions, several viewport-heights tall. `assertDoesNotExist()` on
+     * the last row BEFORE the scroll is the load-bearing line: a `LazyColumn` composes only what
+     * fits, so that can only hold if the list really is taller than the viewport. Then the list is
+     * scrolled to that row and the row is asserted displayed.
+     *
+     * Mutation caught: a `LazyColumn` whose items are dropped or truncated; a row with zero
+     * height; a fixture that shrank back to what fits.
      */
     @Test
     fun everySessionRowIsReachableByScrolling() {
-        show()
+        show(
+            com.musa.opencodeharness.data.buildSessionTree(
+                (1..40).map { index -> session("ses_%02d".format(index), "Session number $index") },
+            ),
+        )
 
-        rule.onNodeWithTag(SESSIONS_TAG)
-        for (id in listOf("ses_root", "ses_child", "ses_child2", "ses_orphan", "ses_earlier")) {
-            rule.onNodeWithTag(sessionsRowTag(id)).assertExists("row $id should exist in the list")
-        }
+        val lastRow = sessionsRowTag("ses_40")
+        // 40 rows cannot fit a 720dp viewport, so if this node is absent the lazy path is real.
+        rule.onNodeWithTag(lastRow).assertDoesNotExist()
+
+        rule.onNodeWithTag(SESSIONS_LIST_TAG).performScrollToNode(hasTestTag(lastRow))
+
+        rule.onNodeWithTag(lastRow).assertIsDisplayed()
+        // And the list really MOVED: the first row was on screen a moment ago and is now out of
+        // composition entirely. Without this, a scroll that silently did nothing would still pass.
+        rule.onNodeWithTag(sessionsRowTag("ses_01")).assertDoesNotExist()
     }
 }

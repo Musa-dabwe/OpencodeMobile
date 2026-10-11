@@ -110,6 +110,15 @@ internal const val SESSIONS_STATUS_WORD_TAG_PREFIX = "sessions:status:"
 /** The status-word tag for a given session id. */
 internal fun sessionsStatusWordTag(id: String) = "$SESSIONS_STATUS_WORD_TAG_PREFIX$id"
 
+/** Test hook: the row's sub-agent qualifier -- present exactly when the row is a sub-agent. */
+internal const val SESSIONS_QUALIFIER_TAG_PREFIX = "sessions:qualifier:"
+
+/** The sub-agent-qualifier tag for a given session id. */
+internal fun sessionsQualifierTag(id: String) = "$SESSIONS_QUALIFIER_TAG_PREFIX$id"
+
+/** Test hook: the scrolling list itself, so a test can drive the lazy path. */
+internal const val SESSIONS_LIST_TAG = "sessions:list"
+
 /**
  * The Sessions screen (design §3.1).
  *
@@ -188,7 +197,7 @@ fun SessionsScreen(
                 isFiltered = search.isNotBlank(),
                 listState = listState,
                 style = style,
-                bottomInset = FAB_TOTAL_HEIGHT + style.screenMargin * 2,
+                bottomInset = style.fabHeight + style.screenMargin * 2,
                 rowTitleStyle = theme.typography.textStyle(TypeRole.ROW_TITLE),
                 metaStyle = theme.typography.textStyle(TypeRole.META),
                 sectionStyle = theme.typography.textStyle(TypeRole.SECTION_HEADER),
@@ -278,6 +287,7 @@ private fun ScopePill(
     onToggleScope: (() -> Unit)?,
 ) {
     val wired = onToggleScope != null
+    val theme = MaterialTheme.openCode
     Box(
         modifier = Modifier
             .testTag(SESSIONS_SCOPE_TAG)
@@ -293,8 +303,8 @@ private fun ScopePill(
             color = if (wired) style.pillText else style.meta,
             maxLines = 1,
             modifier = Modifier
-                .background(style.searchFill, RoundedCornerShape(CapsuleRadius))
-                .border(1.dp, if (wired) style.pillOutline else style.searchOutline, RoundedCornerShape(CapsuleRadius))
+                .background(style.searchFill, RoundedCornerShape(theme.shape.capsule))
+                .border(1.dp, if (wired) style.pillOutline else style.searchOutline, RoundedCornerShape(theme.shape.capsule))
                 .padding(horizontal = 14.dp, vertical = 7.dp),
         )
     }
@@ -341,14 +351,15 @@ private fun SessionsSearchField(
     // `BasicTextField` handles its own taps, so putting `clickable` here costs it nothing and
     // makes the ~13dp above and ~12dp below the text line tappable instead of dead.
     val focusRequester = remember { FocusRequester() }
+    val theme = MaterialTheme.openCode
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = style.screenMargin, vertical = 4.dp)
             .height(SearchHeight)
             .testTag(SESSIONS_SEARCH_FIELD_TAG)
-            .background(style.searchFill, RoundedCornerShape(SearchRadius))
-            .border(1.dp, style.searchOutline, RoundedCornerShape(SearchRadius))
+            .background(style.searchFill, RoundedCornerShape(theme.shape.card))
+            .border(1.dp, style.searchOutline, RoundedCornerShape(theme.shape.card))
             // No ripple: this design has no ripple colour, and a ripple would be the one accent
             // surface on a control that is not the primary action.
             .clickable(interactionSource = null, indication = null) { focusRequester.requestFocus() }
@@ -442,7 +453,7 @@ private fun SessionListBody(
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag(SESSIONS_LIST_TAG),
         // Bottom padding clears the FAB, so the last row can never be pinned under it.
         contentPadding = PaddingValues(bottom = bottomInset),
     ) {
@@ -657,21 +668,24 @@ private fun MetaLine(
             if (index > 0) {
                 Text(text = META_SEPARATOR, style = metaStyle, color = style.meta)
             }
-            val isStatus = segment.text == row.session.statusWord()
+            // The segment's ROLE decides its colour and its tag. Matching on `segment.text ==
+            // statusWord()` was the bug: a project directory named `unknown` produced two
+            // matches, both got tagged, and `onNodeWithTag` threw on the multiple matches.
+            val tag = when (segment.emphasis) {
+                MetaEmphasis.STATUS -> sessionsStatusWordTag(row.session.id)
+                MetaEmphasis.AGENT_BLUE -> sessionsQualifierTag(row.session.id)
+                MetaEmphasis.MUTED -> null
+            }
             Text(
                 text = segment.text,
                 style = metaStyle,
-                color = when {
-                    isStatus -> style.statusWord
-                    segment.emphasis == MetaEmphasis.AGENT_BLUE -> style.agentBlue
-                    else -> style.meta
+                color = when (segment.emphasis) {
+                    MetaEmphasis.STATUS -> style.statusWord
+                    MetaEmphasis.AGENT_BLUE -> style.agentBlue
+                    MetaEmphasis.MUTED -> style.meta
                 },
                 maxLines = 1,
-                modifier = if (isStatus) {
-                    Modifier.testTag(sessionsStatusWordTag(row.session.id))
-                } else {
-                    Modifier
-                },
+                modifier = if (tag != null) Modifier.testTag(tag) else Modifier,
             )
         }
     }
@@ -833,6 +847,7 @@ private fun NewSessionFab(
     modifier: Modifier = Modifier,
 ) {
     val wired = onNewSession != null
+    val theme = MaterialTheme.openCode
     Box(
         modifier = modifier
             // M3's FAB ships with 6dp of tonal elevation and a shadow layer; both stripped,
@@ -841,7 +856,7 @@ private fun NewSessionFab(
             .testTag(SESSIONS_FAB_TAG)
             .background(
                 if (wired) style.fabFill else style.searchFill,
-                RoundedCornerShape(CapsuleRadius),
+                RoundedCornerShape(theme.shape.capsule),
             )
             .then(
                 if (wired) {
@@ -850,7 +865,7 @@ private fun NewSessionFab(
                     // The disabled treatment keeps the design's hairline, which is this screen's
                     // only depth cue, so the button still reads as a control and not as a smudge.
                     Modifier
-                        .border(1.dp, style.searchOutline, RoundedCornerShape(CapsuleRadius))
+                        .border(1.dp, style.searchOutline, RoundedCornerShape(theme.shape.capsule))
                         .semantics {
                             disabled()
                             contentDescription = "$NEW_SESSION_LABEL: $NOT_BUILT_A11Y"
@@ -895,7 +910,13 @@ internal const val NEW_SESSION_LABEL = "New session"
 
 // --- metrics ------------------------------------------------------------------------------------
 
-/** Minimum touch target, from spec §7.5 -- the same value the bottom bar is held to. */
+/**
+ * Radii are NOT declared here: the search field uses `shape.card`, and the pill and FAB use
+ * `shape.capsule`, from the theme's own `ShapeTokens`. Three hardcoded radii had drifted from
+ * those tokens, and the FAB height existed in three places at once.
+ *
+ * Minimum touch target, from spec §7.5 -- the same value the bottom bar is held to.
+ */
 private val MinTouchTarget: Dp = 48.dp
 
 /** The status dot's diameter. */
@@ -903,9 +924,6 @@ private val StatusDotSize: Dp = 8.dp
 
 /** How far one nesting level indents a row. */
 private val NestedIndent: Dp = 16.dp
-
-/** The design's search field: `surface` fill, ~12dp radius. */
-private val SearchRadius: Dp = 12.dp
 
 /**
  * The search field's height: the 48dp minimum touch target, exactly.
@@ -915,14 +933,8 @@ private val SearchRadius: Dp = 12.dp
  */
 private val SearchHeight: Dp = MinTouchTarget
 
-/** Full-capsule radius, the design's shape for pills and primary buttons. */
-private val CapsuleRadius: Dp = 50.dp
-
 /** One swipe action's width: wide enough for `Rename` at 12sp, half the reveal. */
 private val SwipeActionWidth: Dp = 104.dp
-
-/** FAB height plus one screen margin: what the list's bottom padding must clear. */
-private val FAB_TOTAL_HEIGHT: Dp = 53.dp
 
 /** The honest label for a session the server gave no title. Never a fake name. */
 internal const val UNTITLED_SESSION = "(untitled session)"

@@ -31,7 +31,6 @@ class SessionsStyleTest {
         assertEquals(theme.color.text.sectionHeader, style.sectionHeader)
         assertEquals(theme.color.agent.primary, style.agentBlue)
         assertEquals(theme.color.border.subtle, style.hairline)
-        assertEquals(theme.elevation.dividerWidth, style.hairlineWidth)
         assertEquals(theme.color.action.renameBg, style.renameFill)
         assertEquals(theme.color.action.deleteBg, style.deleteFill)
         assertEquals(theme.color.status.idle, style.statusDot)
@@ -39,15 +38,45 @@ class SessionsStyleTest {
         assertEquals(theme.color.status.error, style.errorDot)
         assertEquals(theme.color.text.secondary, style.unknownDot)
         assertEquals(theme.spacing.screenMargin, style.screenMargin)
-        assertEquals(theme.spacing.rowGap, style.rowGap)
         assertEquals(theme.spacing.sectionGap, style.sectionGap)
         assertEquals(theme.color.accent.base, style.pillOutline)
         assertEquals(theme.color.accent.base, style.pillText)
         assertEquals(theme.color.accent.base, style.fabFill)
         assertEquals(theme.color.text.onAccent, style.fabLabel)
-        assertEquals(theme.color.accent.base, style.accent)
         assertEquals(theme.color.border.subtle, style.searchOutline)
         assertEquals(theme.color.text.primary, style.statusWord)
+        assertEquals(theme.shape.fabHeight, style.fabHeight)
+    }
+
+    /**
+     * Every field on [SessionsStyle] is read by a composable.
+     *
+     * The review's nit was that the property test above asserted `rowGap`, `hairlineWidth` and
+     * `accent` -- fields nothing read -- so the "every field comes from its token" claim was
+     * partly vacuous. Those three are gone. This test is the backstop: reintroduce an unread
+     * field and it will fail, because the list below is the complete set the screen actually
+     * paints with.
+     */
+    @Test
+    fun theStyleCarriesNoFieldTheScreenNeverReads() {
+        val readFields = listOf(
+            "page", "searchFill", "title", "rowTitle", "meta", "sectionHeader", "agentBlue",
+            "hairline", "renameFill", "deleteFill", "statusDot", "runningDot", "errorDot",
+            "unknownDot", "statusWord", "screenMargin", "sectionGap", "pillOutline", "pillText",
+            "fabFill", "fabLabel", "searchOutline", "fabHeight",
+        )
+        // `$stable` is the Compose compiler's data-class marker, not a field the screen reads.
+        val stableMarker = "$" + "stable"
+        val declared = SessionsStyle::class.java.declaredFields
+            .map { it.name }
+            .filterNot { it == stableMarker }
+            .toSet()
+
+        assertEquals(
+            "every declared field must be on the read list, or the property test above is " +
+                "asserting something nobody uses",
+            declared, readFields.toSet(),
+        )
     }
 
     /**
@@ -277,7 +306,7 @@ class SessionsStyleTest {
             style.sectionHeader, style.agentBlue, style.hairline, style.renameFill,
             style.deleteFill, style.statusDot, style.runningDot, style.errorDot,
             style.unknownDot, style.statusWord, style.pillOutline,
-            style.pillText, style.fabFill, style.fabLabel, style.accent, style.searchOutline,
+            style.pillText, style.fabFill, style.fabLabel, style.searchOutline,
             theme.swipeActionLabelColor(),
         )
         assertTrue("action.blueFg must not be used as a foreground on this screen", used.none { it == blueFg })
@@ -307,7 +336,7 @@ class SessionsStyleTest {
             style.sectionHeader, style.agentBlue, style.hairline, style.renameFill,
             style.deleteFill, style.statusDot, style.runningDot, style.errorDot,
             style.unknownDot, style.statusWord, style.pillOutline,
-            style.pillText, style.fabFill, style.fabLabel, style.accent, style.searchOutline,
+            style.pillText, style.fabFill, style.fabLabel, style.searchOutline,
             theme.swipeActionLabelColor(),
         )
         for (colour in screenColours) {

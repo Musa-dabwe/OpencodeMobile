@@ -65,16 +65,32 @@ internal data class SessionRowModel(
     val metaLine: String get() = metaSegments.joinToString(" · ") { it.text }
 }
 
-/** One `·`-separated piece of the meta line, with the design's colour role for it. */
+/**
+ * One `·`-separated piece of the meta line, with the design's colour role for it.
+ *
+ * [emphasis] is also the segment's IDENTITY, not only its colour. The review caught the status
+ * segment being found by string equality -- `segment.text == row.session.statusWord()` -- which
+ * breaks the moment a project directory's basename is literally `unknown`: two segments match,
+ * both get tagged, and `onNodeWithTag` throws on the multiple matches. `MetaEmphasis.STATUS` names
+ * the one segment that carries the dot's meaning, so nothing has to guess which `Text` it is.
+ */
 internal data class MetaSegment(val text: String, val emphasis: MetaEmphasis)
 
-/** Which design token colours a meta segment. */
+/** Which design token colours a meta segment, and which segment it is. */
 enum class MetaEmphasis {
-    /** `text.secondary` -- the ordinary case: project, status, qualifier. */
+    /** `text.secondary` -- the ordinary case: project, "has sub-agents". */
     MUTED,
 
     /** `agent.primary` (agentBlue) -- the sub-agent's own agent name. */
     AGENT_BLUE,
+
+    /**
+     * `text.primary` -- the STATUS WORD, the only thing carrying the dot's meaning.
+     *
+     * Distinct from [MUTED] for one reason beyond colour: it is the segment a test looks up by
+     * tag, and it must be identifiable without matching its text.
+     */
+    STATUS,
 }
 
 /**
@@ -303,8 +319,9 @@ internal fun metaSegmentsFor(session: SessionInfo, hasChildren: Boolean): List<M
     }
 
     // status: always, and always adjacent to the dot. "unknown" is a real answer -- it is what
-    // the app knows -- and the a11y rule is that the dot never stands alone.
-    segments += MetaSegment(session.statusWord(), MetaEmphasis.MUTED)
+    // the app knows -- and the a11y rule is that the dot never stands alone. `STATUS` rather than
+    // `MUTED` so the segment is identifiable by role and not by its text.
+    segments += MetaSegment(session.statusWord(), MetaEmphasis.STATUS)
 
     // qualifier: for a sub-agent, its agent name in agentBlue (the design's nesting treatment). We
     // do not currently model an `agent` field on SessionInfo (the v2 session payload has one, but
@@ -341,16 +358,22 @@ internal fun SessionInfo.statusWord(): String = when (statusFor(this)) {
  * The sub-agent's own qualifier, in `agentBlue`.
  *
  * Our [SessionInfo] does not decode the `agent` field the v2 payload carries, so there is no
- * agent name to render and we must not invent one. The honest label is the word "sub-agent". The
- * design wants an agent NAME here; that arrives when the model gains the field, and the wording
- * of this function is the single place that changes.
+ * agent name to render and we must not invent one. What we DO have is `parentID`, and the review
+ * was right that dropping it was a regression: the qualifier had become the constant word
+ * "sub-agent", so the promoted orphan -- the exact case this screen is built around, a sub-agent
+ * with no visible parent -- had nothing at all pointing at the parent it belongs to. An indented
+ * row under nothing reads as a root, which is the mistake `isSubAgentSession` exists to prevent.
+ *
+ * The design wants an agent NAME here; that arrives when the model gains the field, and the
+ * wording of this function is the single place that changes.
  */
-internal fun SessionInfo.subAgentQualifier(): String = SUB_AGENT_QUALIFIER
+internal fun SessionInfo.subAgentQualifier(): String =
+    parentID?.let { "$SUB_AGENT_QUALIFIER of $it" } ?: SUB_AGENT_QUALIFIER
 
 /**
- * The sub-agent marker rendered in `agentBlue`. A named constant rather than a literal at the
- * call site, so the screen test asserts against the SAME string the screen renders -- a reworded
- * marker cannot pass the test that says orphans are still sub-agents.
+ * The sub-agent marker's leading word, rendered in `agentBlue`. A named constant rather than a
+ * literal at the call site, so tests assert against the SAME string the screen renders; the parent
+ * id follows it. A reworded marker cannot pass the tests that say orphans are still sub-agents.
  */
 internal const val SUB_AGENT_QUALIFIER = "sub-agent"
 
