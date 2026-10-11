@@ -75,8 +75,12 @@ class MainActivity : ComponentActivity() {
                         NavTab.CHAT -> SessionListScreen(
                             state = state,
                             onRetry = viewModel::load,
+                            // The runtime log moved to Settings in Task 4; this is the one line that
+                            // keeps it reachable while the user is looking at an unreachable server.
+                            onOpenDiagnostics = { tab = NavTab.SETTINGS },
                         )
-                        // Design section 3.7, plus the runtime log Task 4 relocated here. The card
+                        // Design section 3.7, plus the runtime log Task 4 relocated here -- spec
+                        // section 3.5 is Diagnostics, which is what this card is. The card
                         // is driven by `state.serverState`, so it renders Running, Starting, Dead
                         // and Unreachable honestly rather than assuming the happy path.
                         NavTab.SETTINGS -> SettingsScreen(

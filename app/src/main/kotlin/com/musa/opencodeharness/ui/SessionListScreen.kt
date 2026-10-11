@@ -2,9 +2,11 @@ package com.musa.opencodeharness.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,7 +17,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.musa.opencodeharness.data.model.SessionInfo
 import com.musa.opencodeharness.data.runtime.setup.SetupStep
@@ -39,6 +43,9 @@ import com.musa.opencodeharness.ui.theme.openCode
  *  - **Connecting / unreachable / healthy-empty.** The design has no error state; an app that
  *    cannot reach its own server must say so rather than render an empty list.
  *
+ *  - **A route to the runtime log.** Task 4 moved the log OFF this screen; see [DiagnosticsHint]
+ *    for why it moved, and why what stayed behind is enough to keep a failure diagnosable.
+ *
  * Those states are rendered here in the design's tokens (raised surface, hairline, secondary text)
  * and the session list itself is [SessionsScreen]. Keeping the wrapper means the ViewModel, its
  * tests (`RuntimeWiringTest`, `SessionListViewModelTest`) and the state model are all untouched.
@@ -50,6 +57,13 @@ import com.musa.opencodeharness.ui.theme.openCode
 fun SessionListScreen(
     state: SessionListUiState,
     onRetry: () -> Unit,
+    /**
+     * Takes the user to the Settings tab, where the runtime log now lives.
+     *
+     * Nullable: null means "there is nowhere to go", and then no line is drawn at all. A defaulted
+     * `{}` would be the Task 3 bug -- a control that looks like it does something.
+     */
+    onOpenDiagnostics: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val theme = MaterialTheme.openCode
@@ -88,12 +102,82 @@ fun SessionListScreen(
             }
         }
 
-        // The live log stays mounted: the whole point is that a failure minutes later is still
-        // diagnosable. It is collapsed to the tail, not to nothing. Read-only and already
-        // redacted upstream, so this composable has no secret to handle.
-        LogTail(state.logLines, modifier = Modifier.fillMaxWidth())
+        // One line, and only while there is something wrong. Phase 4's runtime log used to be a
+        // permanently mounted band here; Task 4 relocated it to Settings, where spec section 3.5
+        // puts Diagnostics. This is what keeps that a relocation rather than a deletion: a user
+        // sitting on an unreachable server is told, in one line, that the log still exists and
+        // which tab it is in.
+        //
+        // Rendered only when the server is NOT healthy, so on a healthy server the row is gone
+        // entirely and this screen gives up no space at all. Not rendered at all when unwired,
+        // rather than drawn as a line that promises a tap.
+        if (onOpenDiagnostics != null &&
+            (state.isSettingUp || state.connection !is ConnectionState.Healthy)
+        ) {
+            DiagnosticsHint(onOpenDiagnostics, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
+
+/**
+ * The one-line pointer to the runtime log, which now lives on the Settings tab.
+ *
+ * ## Why a line and not the log
+ *
+ * The design's Sessions screen (section 3.1) is header, search, rows and a FAB. A multi-line log tail
+ * is not in it, it sat below a `Modifier.weight(1f)` list so it stole vertical space from rows that
+ * are now grouped and nested, and it never went away -- including once the server was healthy and its
+ * job was done. The log itself was RELOCATED, not dropped: `SettingsScreen` renders the same
+ * redacted `LogBuffer` tail.
+ *
+ * ## Why it is muted and carries no accent
+ *
+ * It is a route to a diagnostic, not the screen's action. Accent on this screen belongs to the
+ * `+ New session` FAB, and nothing here may compete with it.
+ */
+@Composable
+private fun DiagnosticsHint(
+    onOpenDiagnostics: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val theme = MaterialTheme.openCode
+    Box(
+        modifier = modifier
+            .testTag(SESSIONS_DIAGNOSTICS_TAG)
+            .defaultMinSize(minHeight = MinTouchTarget)
+            // ONE click handler, on the whole row, with NO indication.
+            //
+            // This used to be a double clickable: `wiredOrDisabled` on the Box -- whose default M3
+            // indication ripples from `colorScheme.primary`, and Task 1 sets `primary = accent.base`
+            // -- plus a second `clickable` on the inner Text. That put an ACCENT ripple on a control
+            // that is not this screen's primary action (the FAB owns accent), and gave one gesture
+            // two handlers.
+            //
+            // `wiredOrDisabled` is deliberately NOT used here: its disabled branch is unreachable,
+            // because the caller returns early when there is nowhere to go. Handing the helper an
+            // already-non-null lambda and letting it choose is what hid that.
+            .clickable(interactionSource = null, indication = null, onClick = onOpenDiagnostics)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = DIAGNOSTICS_HINT,
+            style = theme.typography.textStyle(TypeRole.META),
+            // `text.secondary` at 6.6:1, never `text.disabled` -- the user has to be able to read
+            // this, and nothing on the screen may sit below the AA floor.
+            color = theme.color.text.secondary,
+        )
+    }
+}
+
+/** Test hook: the one-line route to the relocated runtime log. */
+internal const val SESSIONS_DIAGNOSTICS_TAG = "sessions:diagnostics"
+
+/** What the line says. It names WHERE the log went, which is the answer to "is it gone?". */
+internal const val DIAGNOSTICS_HINT = "Open the runtime log in Settings"
+
+/** Spec section 7.5's touch-target floor, the same value the design's other controls are held to. */
+private val MinTouchTarget: Dp = 48.dp
 
 /** A centred, non-interactive state message. Never a spinner over an invented empty list. */
 @Composable
@@ -163,48 +247,6 @@ private fun SetupProgress(step: SetupStep, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * The tail of the runtime log, newest last.
- *
- * Already redacted upstream ([com.musa.opencodeharness.data.runtime.launch.LogBuffer] redacts
- * before storing, and the setup layer scrubs its own lines), so this has no filtering to bypass.
- *
- * ## Why it is bounded to a few VISIBLE lines and says how many are hidden
- *
- * A first run emits one "already installed, skipping" line per artifact, which is a dozen lines
- * before the user sees a single session -- on device that took roughly 30% of the screen. The log
- * is diagnostics, not content, so it gets a fixed budget. It is NOT silently truncated: when
- * lines are hidden the count is stated, because a log that quietly drops entries is the failure
- * mode the panel exists to prevent. [LogBuffer] still holds the full bounded tail; nothing is
- * lost, it is just not all on screen at once.
- *
- * Task 5 owns turning this into the design's real setup surface. Until then it stays honest and
- * out of the way.
- */
-@Composable
-private fun LogTail(lines: List<String>, modifier: Modifier = Modifier) {
-    if (lines.isEmpty()) return
-    val theme = MaterialTheme.openCode
-    val visible = lines.takeLast(VISIBLE_LOG_LINES)
-    val hidden = lines.size - visible.size
-    Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Text(
-            text = if (hidden > 0) "log · $hidden earlier lines not shown" else "log",
-            style = theme.typography.textStyle(TypeRole.SECTION_HEADER),
-            color = theme.color.text.sectionHeader,
-        )
-        visible.forEach { line ->
-            Text(
-                text = line,
-                style = theme.typography.textStyle(TypeRole.MONO),
-                color = theme.color.text.secondary,
-            )
-        }
-    }
-}
-
-/** How many log lines the screen shows at once. See [LogTail] for why this is not everything. */
-private const val VISIBLE_LOG_LINES = 4
 
 /**
  * Whether this session was spawned by a parent session (a sub-agent) or opened at top level.

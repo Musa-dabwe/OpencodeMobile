@@ -80,6 +80,12 @@ internal fun settingsSectionTag(title: String) = "$SETTINGS_SECTION_TAG_PREFIX$t
 /** The row tag for a given row label. */
 internal fun settingsRowTag(label: String) = "$SETTINGS_ROW_TAG_PREFIX$label"
 
+/** Test hook: the diagnostics card holding the relocated runtime log. */
+internal const val SETTINGS_LOG_TAG = "settings:log"
+
+/** Test hook: the one line saying how much of the log is not on screen. Absent when none is. */
+internal const val SETTINGS_LOG_TRUNCATED_TAG = "settings:logTruncated"
+
 /** The design's minimum touch target, from spec section 7.5 -- the same value the bar is held to. */
 private val MinTouchTarget: Dp = 48.dp
 
@@ -153,6 +159,12 @@ fun SettingsScreen(
             settingsSections().forEach { section ->
                 SectionCard(section, style, Modifier.padding(top = style.sectionGap))
             }
+
+            DiagnosticsCard(
+                lines = state.logLines,
+                style = style,
+                modifier = Modifier.padding(top = style.sectionGap),
+            )
 
             Spacer(Modifier.heightIn(min = style.sectionGap))
         }
@@ -408,6 +420,133 @@ private fun SettingsRowView(
         }
     }
 }
+
+// --- diagnostics ------------------------------------------------------------------------------------
+
+/**
+ * The runtime log, RELOCATED here from the Sessions screen.
+ *
+ * ## Why it moved
+ *
+ * The band sat permanently below the session list, stealing vertical space from a screen whose rows
+ * are grouped and nested, and it never went away -- including once the server was healthy and its job
+ * was done. The design's Sessions screen is header, search, rows and a FAB; there is no log panel on
+ * it. Spec section 3.5 is Diagnostics, and this card is it.
+ *
+ * It is a RELOCATION, not a deletion. The capability Phase 2 built deliberately is intact: the same
+ * `LogBuffer` tail, the same redaction, the same "N earlier lines not shown" honesty about truncation.
+ *
+ * ## Redaction
+ *
+ * There is no filtering here and there must never be any. [LogBuffer] replaces every registered
+ * secret with `***redacted***` BEFORE storing a line, and `RuntimeSetup` scrubs its own progress
+ * lines, so everything reaching this card is already safe. A panel that "helpfully" re-filtered here
+ * would be a second place to get redaction wrong; a panel that rendered anything it was not given
+ * would be a way to leak. It renders its input and nothing else.
+ *
+ * ## Why the bound is larger than it was on Sessions
+ *
+ * The old band had to share a fixed height with a list, so it showed four lines. This card sits in the
+ * page's own scroll, so nothing is hidden behind a clipped box -- every line shown is reachable by
+ * scrolling -- and twenty lines is about the most that stays a useful diagnostic rather than a wall.
+ * Truncation is still announced rather than silent.
+ */
+@Composable
+private fun DiagnosticsCard(
+    lines: List<String>,
+    style: SettingsStyle,
+    modifier: Modifier = Modifier,
+) {
+    val theme = MaterialTheme.openCode
+    val shape = RoundedCornerShape(style.cardRadius)
+    val visible = lines.takeLast(VISIBLE_LOG_LINES)
+    val hidden = lines.size - visible.size
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(style.card, shape)
+            .noDropShadow()
+            .border(1.dp, style.hairline, shape)
+            .testTag(settingsSectionTag(DIAGNOSTICS_SECTION)),
+    ) {
+        Text(
+            text = DIAGNOSTICS_SECTION,
+            style = theme.typography.textStyle(TypeRole.SECTION_HEADER),
+            color = style.sectionHeader,
+            maxLines = 1,
+            modifier = Modifier.padding(start = style.rowGap * 2, end = style.rowGap * 2, top = style.rowGap, bottom = 8.dp),
+        )
+        Column(
+            modifier = Modifier
+                .padding(horizontal = style.rowGap * 2)
+                .padding(bottom = style.rowGap)
+                .testTag(SETTINGS_LOG_TAG),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = SERVER_LOG_LABEL,
+                    style = theme.typography.textStyle(TypeRole.ROW_TITLE),
+                    color = style.title,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                // A real count of what this buffer holds, named as what it is. Never a fabricated
+                // total: `LogBuffer` is a bounded rolling tail, so "N buffered" is exactly true.
+                Text(
+                    text = bufferedLabel(lines.size),
+                    style = theme.typography.textStyle(TypeRole.META),
+                    color = style.muted,
+                    maxLines = 1,
+                )
+            }
+
+            if (hidden > 0) {
+                Text(
+                    text = truncatedLabel(hidden),
+                    style = theme.typography.textStyle(TypeRole.SECTION_HEADER),
+                    color = style.sectionHeader,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 8.dp).testTag(SETTINGS_LOG_TRUNCATED_TAG),
+                )
+            }
+
+            if (visible.isEmpty()) {
+                Text(
+                    text = NO_LOG_LINES,
+                    style = theme.typography.textStyle(TypeRole.MONO),
+                    color = style.logText,
+                )
+            } else {
+                visible.forEach { line ->
+                    Text(
+                        text = line,
+                        style = theme.typography.textStyle(TypeRole.MONO),
+                        color = style.logText,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The design's group this card belongs to. Spec section 3.5 is the Diagnostics screen. */
+internal const val DIAGNOSTICS_SECTION = "DIAGNOSTICS"
+
+/** The card's own heading. */
+internal const val SERVER_LOG_LABEL = "Server log"
+
+/** What an empty buffer says. Honest, and it names no artefact. */
+internal const val NO_LOG_LINES = "No output yet."
+
+/** How many log lines the card shows at once. See [DiagnosticsCard] for why this is not everything. */
+internal const val VISIBLE_LOG_LINES = 20
+
+/** `N lines buffered` -- the real size of the rolling tail, never an invented total. */
+private fun bufferedLabel(count: Int): String = "$count lines buffered"
+
+/** The truncation notice. A log that quietly drops entries is the failure the panel exists to stop. */
+private fun truncatedLabel(hidden: Int): String = "log · $hidden earlier lines not shown"
 
 // --- previews --------------------------------------------------------------------------------------
 
