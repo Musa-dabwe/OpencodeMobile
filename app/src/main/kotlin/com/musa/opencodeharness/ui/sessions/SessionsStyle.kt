@@ -38,13 +38,27 @@ internal data class SessionsStyle(
     /** Swipe Delete: the design's `deleteBg` fill. */
     val deleteFill: Color,
     /**
-     * The status dot.
+     * The status dot for [SessionStatus.IDLE]: `status.idle`, the design's own dot colour for a
+     * live session. It measures 5.9:1 against the page, comfortably over the 3:1 non-text floor.
      *
-     * `status.idle`, the design's own dot colour for a live session. It measures 5.9:1 against
-     * the page, comfortably over the 3:1 non-text floor, so the dot is a legal non-text cue --
-     * but the screen still never lets it stand alone; see [SessionsScreen] for the a11y rule.
+     * The screen paints a row's dot with [statusDotFor], NOT with this field directly -- the dot
+     * colour is a function of the row's status, and hard-painting one colour is what let a row
+     * whose word read "unknown" wear an idle-green dot.
      */
     val statusDot: Color,
+    /** The dot for [SessionStatus.RUNNING]: `status.running`. See [statusDotFor] for its floor. */
+    val runningDot: Color,
+    /** The dot for [SessionStatus.ERROR]: `status.error`. */
+    val errorDot: Color,
+    /**
+     * The dot for [SessionStatus.UNKNOWN]: `text.secondary` -- deliberately NEUTRAL, not a status
+     * colour.
+     *
+     * UNKNOWN means "this app does not know", and `status.idle` means "healthy and idle", which
+     * is an affirmative claim the app cannot make. It is the same token as [meta] because both
+     * say the same thing: nothing strong. See [statusDotFor].
+     */
+    val unknownDot: Color,
     /**
      * The STATUS WORD beside the dot, in `text.primary`.
      *
@@ -88,8 +102,8 @@ internal data class SessionsStyle(
  *    and never competes with the FAB's solid accent.
  *
  * Accent therefore appears in exactly two places -- the FAB's fill and the pill's outline/text --
- * and the row status dots are NEVER accent: they are `status.idle`, because accent means "action"
- * and a dot means "state".
+ * and the row status dots are NEVER accent: they come from `status.*` or a neutral token, because
+ * accent means "action" and a dot means "state".
  */
 internal fun OpenCodeTheme.sessionsStyle(): SessionsStyle = SessionsStyle(
     page = color.background.base,
@@ -104,6 +118,9 @@ internal fun OpenCodeTheme.sessionsStyle(): SessionsStyle = SessionsStyle(
     renameFill = color.action.renameBg,
     deleteFill = color.action.deleteBg,
     statusDot = color.status.idle,
+    runningDot = color.status.running,
+    errorDot = color.status.error,
+    unknownDot = color.text.secondary,
     statusWord = color.text.primary,
     screenMargin = spacing.screenMargin,
     rowGap = spacing.rowGap,

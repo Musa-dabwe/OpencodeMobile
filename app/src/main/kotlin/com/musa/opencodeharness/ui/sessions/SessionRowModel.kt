@@ -2,6 +2,7 @@ package com.musa.opencodeharness.ui.sessions
 
 import com.musa.opencodeharness.data.SessionNode
 import com.musa.opencodeharness.data.model.SessionInfo
+import androidx.compose.ui.graphics.Color
 import com.musa.opencodeharness.ui.isSubAgentSession
 import java.util.Calendar
 import java.util.Locale
@@ -20,15 +21,21 @@ enum class SessionSection(val label: String) {
 }
 
 /**
- * The two states a row's status dot can show on THIS screen.
+ * The states a row's status dot can show on THIS screen.
  *
- * The design's meta line carries status words (`running`, `idle`, `shared`, `provider error`), and
- * this app has no live run-state for a session -- streaming is a Phase non-goal, and
- * `GET /api/session` returns no run status field on any of the 50 recorded sessions. So this enum
- * deliberately does NOT model "running". It models only what the screen can know today, and the
- * unknown state is spelled out in words next to the dot rather than being a bare coloured pixel.
+ * The design's meta line carries status words, and this enum is what the dot is coloured FROM --
+ * so it enumerates every state the design names, which is what lets [SessionsStyle.statusDotFor]
+ * be a total mapping. A total mapping is the point: the review caught a screen where the dot was
+ * hard-painted `status.idle` while the word beside it read `unknown`, and every row therefore
+ * showed a green "idle" dot next to a word disclaiming exactly that. If a new status arrived
+ * without a dot colour, the mapping would not compile rather than silently paint the wrong state.
+ *
+ * TODAY only [UNKNOWN] is produced, because `GET /api/session` returns no run-status field on any
+ * of the 50 recorded sessions and live streaming is a Phase non-goal. The other arms are the
+ * design's own vocabulary, held here so that the dot and the word can never drift apart again --
+ * they are not a claim that this app knows those states.
  */
-enum class SessionStatus { IDLE, UNKNOWN }
+enum class SessionStatus { IDLE, RUNNING, ERROR, UNKNOWN }
 
 /** One rendered row: a session, how deep it sits, and what the design's meta line says about it. */
 internal data class SessionRowModel(
@@ -254,6 +261,31 @@ private fun startOfDay(millis: Long, zone: TimeZone): Long =
 internal fun statusFor(session: SessionInfo): SessionStatus = SessionStatus.UNKNOWN
 
 /**
+ * The dot colour for a status, from the style's own tokens.
+ *
+ * ## Why UNKNOWN is NOT a status colour
+ *
+ * `status.idle` is the design's own "idle / healthy / done" and reads green -- an affirmative
+ * claim about state. UNKNOWN means "this app does not know", which is not the same claim, so it
+ * gets a NEUTRAL token (`text.secondary`, the same one the meta line already uses) rather than a
+ * status colour. Accent is out of the question by the design's own rule: accent means "action", a
+ * dot means "state".
+ *
+ * ## Why `status.running` is here despite being below the non-text floor
+ *
+ * `status.running` measures 2.60:1 against the page, under the 3:1 floor for a non-text cue. It
+ * is still the only honest colour for that state, and it is legal on this screen because the
+ * status WORD is always rendered beside the dot (see `MetaLine`) -- the pairing, not the pixel,
+ * is what carries the state. `SessionsStyleTest` pins that rule.
+ */
+internal fun SessionsStyle.statusDotFor(status: SessionStatus): Color = when (status) {
+    SessionStatus.IDLE -> statusDot
+    SessionStatus.RUNNING -> runningDot
+    SessionStatus.ERROR -> errorDot
+    SessionStatus.UNKNOWN -> unknownDot
+}
+
+/**
  * The meta line: `project · status · qualifier`.
  *
  * Only segments backed by real data appear. A session with no project directory contributes no
@@ -298,6 +330,10 @@ internal fun metaSegmentsFor(session: SessionInfo, hasChildren: Boolean): List<M
  */
 internal fun SessionInfo.statusWord(): String = when (statusFor(this)) {
     SessionStatus.IDLE -> "idle"
+    SessionStatus.RUNNING -> "running"
+    // Not the design's "provider error": this model has no provider field, so claiming a provider
+    // failed would be inventing state. "error" is what an error IS.
+    SessionStatus.ERROR -> "error"
     SessionStatus.UNKNOWN -> "unknown"
 }
 

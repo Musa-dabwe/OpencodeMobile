@@ -170,13 +170,19 @@ class SessionsPixelTest {
     }
 
     /**
-     * The status dot is painted in `status.idle` and NOT in accent -- the two must never be
-     * confused, because accent means "the primary action" and a dot means "state".
+     * The status dot is painted in the colour its STATUS asks for, and in no other status colour.
      *
-     * Mutation caught: `statusDot = color.accent.base`.
+     * These rows are UNKNOWN (the server sends no run status), so the honest dot is the neutral
+     * `text.secondary`. The shipped bug painted `status.idle` on every row regardless, which put a
+     * green "idle" dot immediately left of the word "unknown" -- the cue asserting a state the
+     * word disclaims. Both halves are asserted: the neutral dot is present, and the idle green
+     * that used to be here is gone.
+     *
+     * Mutation caught: `.background(style.statusDot, ...)` instead of
+     * `style.statusDotFor(row.status)`; `statusDotFor(UNKNOWN)` pointed back at `status.idle`.
      */
     @Test
-    fun theStatusDotIsPaintedInTheStatusColourNotAccent() {
+    fun theStatusDotIsPaintedFromTheRowsStatusNotAFixedColour() {
         show()
 
         val rowBounds = rule.onNodeWithTag(sessionsRowTag("ses_root")).fetchSemanticsNode().boundsInRoot
@@ -191,8 +197,13 @@ class SessionsPixelTest {
         )
 
         assertTrue(
-            "the row must paint the status dot in status.idle ${theme.color.status.idle.toArgbHex()}",
-            rowColours.contains(theme.color.status.idle.argbInt()),
+            "an UNKNOWN row must paint its dot in the neutral ${style.unknownDot.toArgbHex()}",
+            rowColours.contains(style.unknownDot.argbInt()),
+        )
+        assertTrue(
+            "and must NOT paint status.idle ${theme.color.status.idle.toArgbHex()} -- the word " +
+                "beside the dot says 'unknown', so an idle-green dot contradicts it",
+            !rowColours.contains(theme.color.status.idle.argbInt()),
         )
         assertTrue(
             "the row must NOT paint accent -- accent is reserved for the primary action",

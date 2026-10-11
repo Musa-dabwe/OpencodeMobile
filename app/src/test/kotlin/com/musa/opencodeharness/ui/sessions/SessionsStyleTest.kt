@@ -35,6 +35,9 @@ class SessionsStyleTest {
         assertEquals(theme.color.action.renameBg, style.renameFill)
         assertEquals(theme.color.action.deleteBg, style.deleteFill)
         assertEquals(theme.color.status.idle, style.statusDot)
+        assertEquals(theme.color.status.running, style.runningDot)
+        assertEquals(theme.color.status.error, style.errorDot)
+        assertEquals(theme.color.text.secondary, style.unknownDot)
         assertEquals(theme.spacing.screenMargin, style.screenMargin)
         assertEquals(theme.spacing.rowGap, style.rowGap)
         assertEquals(theme.spacing.sectionGap, style.sectionGap)
@@ -102,6 +105,103 @@ class SessionsStyleTest {
     fun theStatusDotClearsTheNonTextFloorOnThePage() {
         val ratio = contrastRatio(style.statusDot, style.page)
         assertTrue("status dot measured $ratio:1 on the page, needs 3.0", ratio >= 3.0)
+    }
+
+    /**
+     * The test the review said was missing: the dot a status PAINTS is that status's own token,
+     * and it agrees with no other status's token.
+     *
+     * The shipped bug was `statusDot` hard-painted on every row while `statusFor` always returned
+     * UNKNOWN, so every row showed an idle-green dot beside the word "unknown" -- the cue
+     * asserting a state the word disclaims. Asserting the mapping is total and pairwise distinct is
+     * what makes that shape impossible to reintroduce.
+     *
+     * Mutations caught: `statusDotFor` ignoring its argument; two statuses sharing a colour; the
+     * UNKNOWN arm pointed at `status.idle` again.
+     */
+    @Test
+    fun everyStatusPaintsItsOwnDotAndAgreesWithNoOther() {
+        val expected = mapOf(
+            SessionStatus.IDLE to theme.color.status.idle,
+            SessionStatus.RUNNING to theme.color.status.running,
+            SessionStatus.ERROR to theme.color.status.error,
+            // Deliberately NEUTRAL, not a status colour: "we do not know" is not "idle".
+            SessionStatus.UNKNOWN to theme.color.text.secondary,
+        )
+
+        assertEquals(
+            "the dot mapping must cover every status, or a new one would compile with no colour",
+            SessionStatus.entries.toSet(),
+            expected.keys,
+        )
+        for ((status, token) in expected) {
+            assertEquals("$status must paint $token", token, style.statusDotFor(status))
+        }
+        for ((status, token) in expected) {
+            for (other in expected.keys - status) {
+                assertNotEquals(
+                    "$status and $other must not share a dot colour, or the dot stops discriminating",
+                    token,
+                    style.statusDotFor(other),
+                )
+            }
+        }
+    }
+
+    /**
+     * UNKNOWN's dot is neutral and, above all, not a status colour.
+     *
+     * The single assertion the shipped bug violated: the dot claimed `idle` while the word said
+     * `unknown`. Mutation caught: `UNKNOWN -> status.idle`.
+     */
+    @Test
+    fun theUnknownDotIsNeutralAndNotAStatusColour() {
+        val dot = style.statusDotFor(SessionStatus.UNKNOWN)
+
+        assertNotEquals(
+            "an UNKNOWN row must not wear the idle dot -- the word beside it says 'unknown'",
+            theme.color.status.idle,
+            dot,
+        )
+        assertNotEquals(theme.color.status.running, dot)
+        assertNotEquals(theme.color.status.error, dot)
+        assertNotEquals("a dot means state; accent means action", theme.color.accent.base, dot)
+    }
+
+    /**
+     * No status dot is ever accent.
+     *
+     * Mutation caught: an arm of `statusDotFor` pointed at `color.accent.base`.
+     */
+    @Test
+    fun noStatusDotIsAccent() {
+        for (status in SessionStatus.entries) {
+            assertNotEquals(
+                "$status painted in accent would read as the primary action",
+                theme.color.accent.base,
+                style.statusDotFor(status),
+            )
+        }
+    }
+
+    /**
+     * Every dot EXCEPT `running` clears the 3:1 non-text floor on its own; `running` is 2.60:1 and
+     * is legal only because the status word is always rendered beside it.
+     *
+     * The asymmetry is the design's, not a bug being tolerated: `status.running` has no darker
+     * alternative in the palette, and the a11y rule on this screen is that the dot never stands
+     * alone. If the palette ever gains a legible running colour, the precondition below fails and
+     * the decision gets revisited rather than silently drifting.
+     */
+    @Test
+    fun everyDotButRunningClearsTheNonTextFloor() {
+        val running = contrastRatio(theme.color.status.running, style.page)
+        assertTrue("precondition: status.running is expected to be sub-floor, measured $running:1", running < 3.0)
+
+        for (status in SessionStatus.entries - SessionStatus.RUNNING) {
+            val ratio = contrastRatio(style.statusDotFor(status), style.page)
+            assertTrue("$status dot measured $ratio:1 on the page, needs 3.0", ratio >= 3.0)
+        }
     }
 
     /**
@@ -175,7 +275,8 @@ class SessionsStyleTest {
         val used = listOf(
             style.page, style.searchFill, style.title, style.rowTitle, style.meta,
             style.sectionHeader, style.agentBlue, style.hairline, style.renameFill,
-            style.deleteFill, style.statusDot, style.statusWord, style.pillOutline,
+            style.deleteFill, style.statusDot, style.runningDot, style.errorDot,
+            style.unknownDot, style.statusWord, style.pillOutline,
             style.pillText, style.fabFill, style.fabLabel, style.accent, style.searchOutline,
             theme.swipeActionLabelColor(),
         )
@@ -204,7 +305,8 @@ class SessionsStyleTest {
         val screenColours: List<Color> = listOf(
             style.page, style.searchFill, style.title, style.rowTitle, style.meta,
             style.sectionHeader, style.agentBlue, style.hairline, style.renameFill,
-            style.deleteFill, style.statusDot, style.statusWord, style.pillOutline,
+            style.deleteFill, style.statusDot, style.runningDot, style.errorDot,
+            style.unknownDot, style.statusWord, style.pillOutline,
             style.pillText, style.fabFill, style.fabLabel, style.accent, style.searchOutline,
             theme.swipeActionLabelColor(),
         )

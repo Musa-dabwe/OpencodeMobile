@@ -113,15 +113,17 @@ internal fun sessionsStatusWordTag(id: String) = "$SESSIONS_STATUS_WORD_TAG_PREF
  *     never "has no children". Indentation is by TREE DEPTH, which is a different fact again --
  *     a promoted orphan (has a parent, parent not in the list) is a sub-agent at depth 0. See
  *     [buildSessionRows].
- *  2. **The status dot is never alone.** `status.running` measures 2.60:1 on the page, under the
- *     3:1 non-text floor, and is acceptable only because the word always sits beside it.
- *     [SessionRow] renders the word in every path; there is no branch that draws a bare dot.
+ *  2. **The status dot never contradicts the word, and is never alone.** The dot is coloured by
+ *     [SessionsStyle.statusDotFor] from [SessionRowModel.status], so the two cannot disagree;
+ *     `status.running` measures 2.60:1 on the page, under the 3:1 non-text floor, and is
+ *     acceptable only because the word always sits beside it. [SessionRow] renders the word in
+ *     every path; there is no branch that draws a bare dot.
  *
  * ## Accent
  *
  * The `+ New session` FAB is the screen's single primary action and wears the solid accent fill;
- * the scope pill wears an accent OUTLINE because it only filters. Row dots are `status.idle`, never
- * accent. See [sessionsStyle] for the full ruling.
+ * the scope pill wears an accent OUTLINE because it only filters. Row dots are `status.*` or a
+ * neutral token, never accent. See [sessionsStyle] for the full ruling.
  */
 @Composable
 fun SessionsScreen(
@@ -485,10 +487,11 @@ private fun SectionHeader(
  *
  * ## The a11y rule, enforced in this function
  *
- * The dot is a `status.*` colour and the status WORD is always rendered beside it -- as a tagged
- * node, so a test can prove the pairing rather than trust this comment. `status.running` is
- * 2.60:1 on the page, under the 3:1 non-text floor; it is only acceptable because the word carries
- * the meaning. There is no branch here that renders a dot without that word.
+ * The dot's colour is derived from [SessionRowModel.status] via [SessionsStyle.statusDotFor], and
+ * the status WORD is always rendered beside it -- as a tagged node, so a test can prove the pairing
+ * rather than trust this comment. `status.running` is 2.60:1 on the page, under the 3:1 non-text
+ * floor; it is only acceptable because the word carries the meaning. There is no branch here that
+ * renders a dot without that word, and none that paints a colour that disagrees with the word.
  */
 @Composable
 private fun SessionRow(
@@ -524,7 +527,10 @@ private fun SessionRow(
             Box(
                 modifier = Modifier
                     .size(StatusDotSize)
-                    .background(style.statusDot, CircleShape)
+                    // The dot's colour FOLLOWS the row's status. Painting one fixed colour here is
+                    // what produced the contradiction the review caught: every row wore an
+                    // idle-green dot while the word beside it read "unknown".
+                    .background(style.statusDotFor(row.status), CircleShape)
                     // The dot is decorative: the word beside it is what carries the state, and
                     // naming both would read "unknown, unknown" to a screen reader.
                     .semantics { contentDescription = "" },
