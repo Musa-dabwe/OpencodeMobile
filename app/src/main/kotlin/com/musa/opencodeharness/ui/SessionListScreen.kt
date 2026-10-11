@@ -1,5 +1,6 @@
 package com.musa.opencodeharness.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,10 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,36 +16,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.musa.opencodeharness.data.SessionNode
-import com.musa.opencodeharness.data.runtime.setup.SetupStep
 import com.musa.opencodeharness.data.model.SessionInfo
-import com.musa.opencodeharness.ui.theme.Hairline
-import com.musa.opencodeharness.ui.theme.OpenCodeMobileTheme
+import com.musa.opencodeharness.data.runtime.setup.SetupStep
+import com.musa.opencodeharness.ui.sessions.SessionsScreen
+import com.musa.opencodeharness.ui.theme.TypeRole
+import com.musa.opencodeharness.ui.theme.openCode
 
 /**
- * The whole app, top to bottom: first-run progress, the live log, the connection status, and the
- * session list.
+ * The Chat destination: the design's Sessions screen plus the runtime states that surround it.
  *
- * ## Why setup lives here rather than on its own screen
+ * ## Why this file still exists after the Task 3 rewrite
  *
- * The plan offered a Setup screen or "drive setup from the existing screen and show progress",
- * and explicitly allowed the smaller option if justified. Taken, because:
+ * Task 3 replaced the PRESENTATION of the session list -- header, search, sectioned rows, swipe
+ * actions, FAB -- with the design. It did not remove any of the runtime states that screen was
+ * also carrying, because those are real and dropping them would be a regression, not a cleanup:
  *
- *  - the flow is a straight line (resolve -> download -> install -> start -> health) with no
- *    choice for the user to make, so a separate screen would be a screen with nothing to
- *    navigate to and nothing to go back to;
- *  - navigation -- a nav host, routes, a bottom bar -- is an explicit non-goal for this phase,
- *    so a second screen would first require building the machinery that is deferred;
- *  - one screen means one state machine. "Setup finished" and "sessions are loaded" are the
- *    same object, so the setup-completed-but-list-stale bug has nowhere to live;
- *  - it is the same code path after a process death. Resuming is just the flow re-running with
- *    the per-artifact work already skipped, so resume needs no separate screen to appear from.
+ *  - **First-run setup progress.** `SetupStep` is where a download/install/start actually is. The
+ *    design's Sessions page has no progress bar because a designed product is already installed;
+ *    this app is not, and hiding the progress would make a 40-second silent wait.
+ *  - **The server-death banner.** A server that exited must never leave "Connected" on screen.
+ *  - **Connecting / unreachable / healthy-empty.** The design has no error state; an app that
+ *    cannot reach its own server must say so rather than render an empty list.
+ *
+ * Those states are rendered here in the design's tokens (raised surface, hairline, secondary text)
+ * and the session list itself is [SessionsScreen]. Keeping the wrapper means the ViewModel, its
+ * tests (`RuntimeWiringTest`, `SessionListViewModelTest`) and the state model are all untouched.
  *
  * Stateless on purpose -- it takes a [SessionListUiState] and an `onRetry` callback, and holds no
- * coroutine scope, no client and no remembered mutable state. The ViewModel owns the load, and
- * this recomposes from whatever it published.
+ * coroutine scope, no client and no remembered mutable state. The ViewModel owns the load.
  */
 @Composable
 fun SessionListScreen(
@@ -56,101 +52,92 @@ fun SessionListScreen(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxSize()) {
-        ConnectionHeader(state.connection, state.serverUrl, onRetry)
-        Hairline()
+    val theme = MaterialTheme.openCode
 
-        // Death outranks everything else. A server that has exited must never leave the word
-        // "Connected" on screen, so its reason is pinned above whatever else is being shown.
+    Column(modifier = modifier.fillMaxSize()) {
+        // Death outranks everything else. A server that has exited must never leave a session
+        // list -- or any other live-looking state -- above the reason it stopped.
         state.serverDeath?.let { death ->
             Text(
                 text = "Server stopped: $death",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
+                style = theme.typography.textStyle(TypeRole.META),
+                color = theme.color.status.error,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
 
-        if (state.isSettingUp) SetupProgress(state.setup)
+        if (state.isSettingUp) SetupProgress(state.setup, modifier = Modifier.fillMaxWidth())
 
-        // The live log stays mounted even when healthy: the whole point is that a failure
-        // minutes later is still diagnosable. It is collapsed to the tail, not to nothing.
-        LogTail(state.logLines)
-
-        // All four states the slice promises to render, keyed on the state itself:
-        //   connecting | unreachable | healthy-with-sessions | healthy-and-empty.
         when (val connection = state.connection) {
-            ConnectionState.Connecting -> Centred {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(16.dp))
-                Text("Connecting to the OpenCode server…")
-            }
+            ConnectionState.Connecting -> StatusPane("Connecting to the OpenCode server…")
 
-            is ConnectionState.Unreachable -> Centred {
-                Text(
-                    text = connection.reason,
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = onRetry) { Text("Retry") }
-            }
+            is ConnectionState.Unreachable -> StatusPane(
+                primary = connection.reason,
+                action = onRetry,
+            )
 
-            ConnectionState.Healthy ->
+            ConnectionState.Healthy -> {
                 if (state.isEmptyResult) {
-                    Centred {
-                        Text(
-                            text = "Connected. No sessions on the server yet.",
-                            textAlign = TextAlign.Center,
-                        )
-                    }
+                    // Honest emptiness: the server answered and there is nothing there. This is
+                    // distinct from "still loading" and from "failed", and it names no count,
+                    // because no count is known.
+                    StatusPane("Connected. No sessions on the server yet.")
                 } else {
-                    SessionList(state.roots)
+                    SessionsScreen(roots = state.roots, modifier = Modifier.weight(1f))
                 }
+            }
         }
+
+        // The live log stays mounted: the whole point is that a failure minutes later is still
+        // diagnosable. It is collapsed to the tail, not to nothing. Read-only and already
+        // redacted upstream, so this composable has no secret to handle.
+        LogTail(state.logLines, modifier = Modifier.fillMaxWidth())
     }
 }
 
+/** A centred, non-interactive state message. Never a spinner over an invented empty list. */
 @Composable
-private fun ConnectionHeader(
-    connection: ConnectionState,
-    serverUrl: String?,
-    onRetry: () -> Unit,
-) {
-    val (label, color) = when (connection) {
-        ConnectionState.Connecting -> "Connecting…" to MaterialTheme.colorScheme.secondary
-        ConnectionState.Healthy -> "Connected" to MaterialTheme.colorScheme.primary
-        is ConnectionState.Unreachable -> "Not connected" to MaterialTheme.colorScheme.error
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun StatusPane(primary: String, action: (() -> Unit)? = null) {
+    val theme = MaterialTheme.openCode
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            color = color,
+            text = primary,
+            style = theme.typography.textStyle(TypeRole.BODY),
+            color = theme.color.text.secondary,
+            textAlign = TextAlign.Center,
         )
-        // host:port only. The password is never rendered, by ServerEndpoint's second invariant.
-        if (serverUrl != null) {
-            Spacer(Modifier.weight(1f))
+        if (action != null) {
+            Spacer(Modifier.height(16.dp))
             Text(
-                text = serverUrl.removePrefix("http://"),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = "Retry",
+                style = theme.typography.textStyle(TypeRole.LABEL),
+                color = theme.color.accent.base,
+                modifier = Modifier
+                    .padding(vertical = 8.dp)
+                    .retryTap(action),
             )
         }
     }
 }
 
+// The accent-coloured Retry. `indication = null` because this design has no ripple colour; the
+// accent text itself is the affordance, matching the scope pill's treatment.
+private fun Modifier.retryTap(action: () -> Unit): Modifier =
+    this.clickable(interactionSource = null, indication = null, onClick = action)
+
 /**
- * First-run progress. One line, not a spinner stack: the operation is a queue of known artifacts
- * and the interesting thing is WHICH one and how far through, which a percentage alone hides.
+ * First-run progress: one line naming WHICH artifact and how far, not a spinner stack.
+ *
+ * The queue of known artifacts is what makes this useful; a percentage alone hides which thing
+ * the app is waiting on.
  */
 @Composable
-private fun SetupProgress(step: SetupStep) {
+private fun SetupProgress(step: SetupStep, modifier: Modifier = Modifier) {
+    val theme = MaterialTheme.openCode
     val text = when (step) {
         SetupStep.Idle -> "Starting up…"
         is SetupStep.Resolving -> "Checking the latest OpenCode release…"
@@ -163,11 +150,15 @@ private fun SetupProgress(step: SetupStep) {
         SetupStep.Ready -> "Server ready"
         is SetupStep.Failed -> "Setup failed: ${step.reason}"
     }
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text(text = text, style = MaterialTheme.typography.bodyMedium)
+    Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(text = text, style = theme.typography.textStyle(TypeRole.META), color = theme.color.text.secondary)
         if (step !is SetupStep.Ready && step !is SetupStep.Failed) {
             Spacer(Modifier.height(6.dp))
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = theme.color.accent.base,
+                trackColor = theme.color.background.raised,
+            )
         }
     }
 }
@@ -175,81 +166,45 @@ private fun SetupProgress(step: SetupStep) {
 /**
  * The tail of the runtime log, newest last.
  *
- * Read-only and already redacted upstream ([com.musa.opencodeharness.data.runtime.launch.LogBuffer]
- * redacts before storing, and the setup layer scrubs its own lines), so this composable has no
- * filtering to bypass and no secret to handle.
+ * Already redacted upstream ([com.musa.opencodeharness.data.runtime.launch.LogBuffer] redacts
+ * before storing, and the setup layer scrubs its own lines), so this has no filtering to bypass.
+ *
+ * ## Why it is bounded to a few VISIBLE lines and says how many are hidden
+ *
+ * A first run emits one "already installed, skipping" line per artifact, which is a dozen lines
+ * before the user sees a single session -- on device that took roughly 30% of the screen. The log
+ * is diagnostics, not content, so it gets a fixed budget. It is NOT silently truncated: when
+ * lines are hidden the count is stated, because a log that quietly drops entries is the failure
+ * mode the panel exists to prevent. [LogBuffer] still holds the full bounded tail; nothing is
+ * lost, it is just not all on screen at once.
+ *
+ * Task 5 owns turning this into the design's real setup surface. Until then it stays honest and
+ * out of the way.
  */
 @Composable
-private fun LogTail(lines: List<String>) {
+private fun LogTail(lines: List<String>, modifier: Modifier = Modifier) {
     if (lines.isEmpty()) return
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+    val theme = MaterialTheme.openCode
+    val visible = lines.takeLast(VISIBLE_LOG_LINES)
+    val hidden = lines.size - visible.size
+    Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
         Text(
-            text = "log",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = if (hidden > 0) "log · $hidden earlier lines not shown" else "log",
+            style = theme.typography.textStyle(TypeRole.SECTION_HEADER),
+            color = theme.color.text.sectionHeader,
         )
-        lines.takeLast(MAX_LOG_LINES).forEach { line ->
+        visible.forEach { line ->
             Text(
                 text = line,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = theme.typography.textStyle(TypeRole.MONO),
+                color = theme.color.text.secondary,
             )
         }
     }
 }
 
-/** Bounded in the view as well as in LogBuffer: this recomposes on every state emission. */
-private const val MAX_LOG_LINES = 200
-
-/**
- * The list body.
- *
- * The tree is flattened depth-first into rows carrying their depth, which is what produces the
- * indentation. Keys are session ids: stable, unique per the `buildSessionTree` invariant that
- * every session appears exactly once, and stable across reloads so a row keeps its scroll
- * position and its composed children instead of being rebuilt on every list emission.
- */
-@Composable
-private fun SessionList(roots: List<SessionNode>) {
-    val rows = roots.toRows()
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        items(items = rows, key = { it.session.id }) { row ->
-            SessionRow(session = row.session, depth = row.depth)
-            Hairline()
-        }
-    }
-}
-
-@Composable
-private fun SessionRow(session: SessionInfo, depth: Int) {
-    // THE sub-agent marker. See [isSubAgentSession] for why this is `parentID != null` and NOT
-    // `children.isEmpty()` -- the two disagree for every childless sub-agent.
-    val isSubAgent = session.isSubAgentSession
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            // Indent by depth, so a sub-agent reads as nested under its parent.
-            .padding(start = (16 + depth * 16).dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(
-            text = session.title?.takeIf { it.isNotBlank() } ?: "(untitled session)",
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Text(
-            text = if (isSubAgent) {
-                // Showing the parent id is what makes a promoted orphan legible: its parent is
-                // not in the list, and without the id the row would look merely misplaced.
-                "└ sub-agent of ${session.parentID}"
-            } else {
-                "• session"
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
+/** How many log lines the screen shows at once. See [LogTail] for why this is not everything. */
+private const val VISIBLE_LOG_LINES = 4
 
 /**
  * Whether this session was spawned by a parent session (a sub-agent) or opened at top level.
@@ -275,97 +230,3 @@ private fun SessionRow(session: SessionInfo, depth: Int) {
  * one line, has no UI in it, and can be asserted directly. See `SubAgentMarkerTest`.
  */
 internal val SessionInfo.isSubAgentSession: Boolean get() = parentID != null
-
-@Composable
-private fun Centred(content: @Composable () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) { content() }
-}
-
-/** One rendered row: the session plus how deep it sits in the tree. */
-private data class SessionRowData(val session: SessionInfo, val depth: Int)
-
-/**
- * Depth-first flatten of the tree into rows, parents before their children.
- *
- * Order matches what the server returned (see `buildSessionTree`'s order rule), so the list
- * reads the same as the flat response would. A local function rather than a coroutine: this is
- * pure and bounded by the session count.
- */
-private fun List<SessionNode>.toRows(): List<SessionRowData> {
-    val rows = ArrayList<SessionRowData>()
-    fun walk(nodes: List<SessionNode>, depth: Int) {
-        for (node in nodes) {
-            rows += SessionRowData(node.session, depth)
-            walk(node.children, depth + 1)
-        }
-    }
-    walk(this, 0)
-    return rows
-}
-
-// --- previews ---------------------------------------------------------------------------------
-
-private val previewRoot = SessionInfo(id = "ses_root", title = "Add a keystore-backed session switcher")
-
-private val previewSubAgent = SessionInfo(
-    id = "ses_sub",
-    title = "sub-agent of the root",
-    parentID = "ses_root",
-)
-
-/** Promoted orphan: a sub-agent whose parent is not in the list. Must still read as a sub-agent. */
-private val previewOrphan = SessionInfo(
-    id = "ses_orphan",
-    title = "orphan (parent is on another page)",
-    parentID = "ses_absent",
-)
-
-@Preview(showBackground = true, name = "connected")
-@Composable
-private fun ConnectedPreview() {
-    OpenCodeMobileTheme {
-        SessionListScreen(
-            state = SessionListUiState(
-                connection = ConnectionState.Healthy,
-                roots = listOf(
-                    SessionNode(
-                        previewRoot,
-                        listOf(
-                            SessionNode(previewSubAgent, emptyList()),
-                            SessionNode(previewOrphan, emptyList()),
-                        ),
-                    ),
-                ),
-            ),
-            onRetry = {},
-        )
-    }
-}
-
-@Preview(showBackground = true, name = "empty")
-@Composable
-private fun EmptyPreview() {
-    OpenCodeMobileTheme {
-        SessionListScreen(
-            state = SessionListUiState(connection = ConnectionState.Healthy),
-            onRetry = {},
-        )
-    }
-}
-
-@Preview(showBackground = true, name = "unreachable")
-@Composable
-private fun UnreachablePreview() {
-    OpenCodeMobileTheme {
-        SessionListScreen(
-            state = SessionListUiState(
-                connection = ConnectionState.Unreachable("Could not reach the server (ConnectException)."),
-            ),
-            onRetry = {},
-        )
-    }
-}

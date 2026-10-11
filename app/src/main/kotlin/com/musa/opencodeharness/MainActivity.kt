@@ -67,8 +67,10 @@ class MainActivity : ComponentActivity() {
 
                 AppShell(selected = tab, onSelect = { tab = it }) { destination ->
                     when (destination) {
-                        // The one destination with real content. `SessionListScreen` is untouched:
-                        // it is restyled to the design in Task 3, not here.
+                        // The one destination with real content. Phase 3 Task 3 restyled the
+                        // session list to the design; `SessionListScreen` is now a wrapper that
+                        // keeps the runtime states (setup progress, server death, unreachable)
+                        // and delegates the list itself to the design's Sessions screen.
                         NavTab.CHAT -> SessionListScreen(
                             state = state,
                             onRetry = viewModel::load,
