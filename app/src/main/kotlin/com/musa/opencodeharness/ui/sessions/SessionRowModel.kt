@@ -35,6 +35,10 @@ internal data class SessionRowModel(
     val session: SessionInfo,
     /** Tree depth: 0 for a root row, 1 for a sub-agent, and so on. Drives the indentation. */
     val depth: Int,
+    /**
+     * The section this row's whole top-level GROUP sits under. Every row of a group shares it, so
+     * a parent and its sub-agents always land under one header together.
+     */
     val section: SessionSection,
     /** The relative timestamp shown right-aligned: `now`, `Yesterday`, `Mon`, `Sat`. */
     val timestamp: String,
@@ -80,7 +84,7 @@ internal typealias SessionRows = List<SessionRowModel>
 /**
  * Builds the display rows for the sessions screen from the session tree.
  *
- * ## Why the nesting rule is NOT re-derived here
+ * ## The nesting rule is NOT re-derived here
  *
  * The one thing this file is careful about is the rule the phase plan calls out as a trap: "a
  * session is a sub-agent iff `parentID != null`." This function NEVER asks `node.children` whether
@@ -94,35 +98,82 @@ internal typealias SessionRows = List<SessionRowModel>
  * orphan has depth 0 (its parent is not in the list, so `buildSessionTree` promoted it to the top
  * level) but IS a sub-agent. So a row indents by depth and colours the agent name by
  * [SessionRowModel.isSubAgent]; the two must never be conflated.
+ *
+ * ## A section belongs to a GROUP, not to a row
+ *
+ * `section` is computed ONCE per top-level group -- TODAY if the group OR ANY of its descendants
+ * has activity today -- and threaded down through `walk`, and the GROUPS are then ordered
+ * TODAY-first before flattening. Two real bugs come from computing it per row instead:
+ *
+ *  1. **A sub-agent torn out of its parent.** A parent from three days ago whose sub-agent ran a
+ *     minute ago carries its own EARLIER stamp; under a per-row section the emission loop puts a
+ *     header between them and the screen reads `EARLIER | parent`, `TODAY | child`. That breaks the
+ *     design's "sub-agents nest indented under their parent" with a header row, and it separates
+ *     the MORE active session from its own tree. A group is a unit: it heads by its most recent
+ *     member and stays contiguous.
+ *  2. **A repeated `EARLIER` header.** `buildSessionTree` preserves server order and the server
+ *     does not sort by recency, so `[older, newer, oldest]` produced
+ *     `EARLIER | TODAY | EARLIER` -- the same header twice. Ordering the GROUPS before flattening
+ *     makes each section one contiguous run.
+ *
+ * The sort is on groups, not on flattened rows, so contiguity is structural rather than a
+ * consequence of the sort's stability. Within a group, tree order -- parent then its children, in
+ * server order -- is untouched.
  */
 internal fun buildSessionRows(
     roots: List<SessionNode>,
     nowMillis: Long,
     zone: TimeZone = TimeZone.getDefault(),
-): List<SessionRowModel> = buildList {
-    fun walk(node: SessionNode, depth: Int) {
-        val session = node.session
-        val stamp = session.mostRecentTimeMillis()
-        add(
-            SessionRowModel(
-                session = session,
-                depth = depth,
-                section = sectionFor(stamp, nowMillis, zone),
-                timestamp = relativeTimestamp(stamp, nowMillis, zone),
-                status = statusFor(session),
-                metaSegments = metaSegmentsFor(session, node.children.isNotEmpty()),
-            ),
-        )
-        node.children.forEach { walk(it, depth + 1) }
+): List<SessionRowModel> {
+    val groups = roots
+        .map { root -> root to sectionFor(root.mostRecentStampInGroup(), nowMillis, zone) }
+        .sortedBy { (_, section) -> section.ordinal }
+
+    return buildList {
+        fun walk(node: SessionNode, depth: Int, section: SessionSection) {
+            val session = node.session
+            val stamp = session.mostRecentTimeMillis()
+            add(
+                SessionRowModel(
+                    session = session,
+                    depth = depth,
+                    section = section,
+                    timestamp = relativeTimestamp(stamp, nowMillis, zone),
+                    status = statusFor(session),
+                    metaSegments = metaSegmentsFor(session, node.children.isNotEmpty()),
+                ),
+            )
+            node.children.forEach { walk(it, depth + 1, section) }
+        }
+        groups.forEach { (root, section) -> walk(root, depth = 0, section = section) }
     }
-    roots.forEach { walk(it, depth = 0) }
 }
 
 /**
- * The section a row falls under: TODAY if its most recent activity is on the same calendar day as
- * "now" in [zone], EARLIER otherwise.
+ * The most recent timestamp anywhere in this subtree -- the group itself or any descendant.
  *
- * A session with no timestamp at all is EARLIER, not TODAY. "We have no idea when this happened"
+ * `null` only when NO session in the group carries a timestamp at all, which then sections as
+ * EARLIER: "we do not know when this happened" must not read as "this just happened".
+ */
+private fun SessionNode.mostRecentStampInGroup(): Long? {
+    var newest: Long? = null
+    fun visit(node: SessionNode) {
+        val stamp = node.session.mostRecentTimeMillis()
+        if (stamp != null && (newest == null || stamp > newest!!)) newest = stamp
+        node.children.forEach(::visit)
+    }
+    visit(this)
+    return newest
+}
+
+/**
+ * The section a GROUP falls under: TODAY if its most recent activity is on the same calendar day
+ * as "now" in [zone], EARLIER otherwise.
+ *
+ * The stamp passed here is the group's maximum (see `mostRecentStampInGroup`), never one row's own
+ * timestamp -- see the sectioning rules on [buildSessionRows].
+ *
+ * A group with no timestamp anywhere is EARLIER, not TODAY. "We have no idea when this happened"
  * must not read as "this happened just now" -- the whole point of the section split is recency,
  * and an unknown time is not recent.
  */

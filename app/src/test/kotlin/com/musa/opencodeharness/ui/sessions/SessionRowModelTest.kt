@@ -198,6 +198,151 @@ class SessionRowModelTest {
         assertEquals(listOf(SessionSection.TODAY, SessionSection.EARLIER), sections)
     }
 
+    /**
+     * A section is a property of the whole GROUP, not of the row that happens to be rendering.
+     *
+     * This is the exact case the code review caught: a parent from three days ago whose sub-agent
+     * ran a minute ago. Computed per row, the two land in different sections, the emission loop
+     * puts a header between them, and the screen shows `EARLIER | parent`, `TODAY | child` --
+     * tearing the sub-agent out from under its own parent, which is precisely what the design's
+     * nesting says must not happen.
+     *
+     * Mutation caught: reverting to `sectionFor(row.mostRecentTimeMillis(), ...)`.
+     */
+    @Test
+    fun aGroupWhoseChildRanToday_staysTogetherUnderToday() {
+        val tree = buildSessionTree(listOf(
+            session("stale_parent", updated = at(2026, Calendar.SEPTEMBER, 9, 8, 0)),
+            session("fresh_child", parentID = "stale_parent", updated = at(2026, Calendar.SEPTEMBER, 12, 14, 58)),
+        ))
+
+        val rows = buildSessionRows(tree, now, utc)
+
+        assertEquals(
+            "the parent is not itself recent, but its group is -- both rows must share one section",
+            listOf(SessionSection.TODAY, SessionSection.TODAY),
+            rows.map { it.section },
+        )
+        assertEquals(
+            "and the child must still render immediately after its parent, never across a header",
+            listOf("stale_parent", "fresh_child"),
+            rows.map { it.session.id },
+        )
+    }
+
+    /**
+     * Nesting is unbounded, so the rule has to hold all the way down: only the LEAF is recent and
+     * the whole chain still heads under TODAY.
+     *
+     * Mutation caught: computing the group stamp from the ROOT only, which would put the recent
+     * leaf's ancestors in a different section than the leaf.
+     */
+    @Test
+    fun aDeepChainWhoseLeafIsRecent_keepsTheWholeChainUnderToday() {
+        val tree = buildSessionTree(listOf(
+            session("a", updated = at(2026, Calendar.SEPTEMBER, 1, 8, 0)),
+            session("b", parentID = "a", updated = at(2026, Calendar.SEPTEMBER, 5, 8, 0)),
+            session("c", parentID = "b", updated = at(2026, Calendar.SEPTEMBER, 12, 9, 0)),
+        ))
+
+        val rows = buildSessionRows(tree, now, utc)
+
+        assertEquals(listOf(0, 1, 2), rows.map { it.depth })
+        assertTrue(
+            "the whole chain shares one section, got ${rows.map { it.section }}",
+            rows.all { it.section == SessionSection.TODAY },
+        )
+    }
+
+    /**
+     * The server does NOT sort by recency (`buildSessionTree` preserves server order and the
+     * recorded envelope is paginated), so `[older, newer, oldest]` is an ordinary input.
+     *
+     * Under per-row sectioning this rendered `EARLIER | TODAY | EARLIER` -- the same header twice.
+     * Grouping first and ordering TODAY-first makes each section one contiguous run, and the sort
+     * is stable so the two EARLIER groups keep their server order relative to each other.
+     *
+     * Mutation caught: dropping the `sortedBy`, or sorting by anything other than the section.
+     */
+    @Test
+    fun serverOrderThatIsNotRecencySorted_putsTodayFirstAndKeepsEachSectionContiguous() {
+        val tree = buildSessionTree(listOf(
+            session("older", updated = at(2026, Calendar.SEPTEMBER, 10, 8, 0)),
+            session("newest", updated = at(2026, Calendar.SEPTEMBER, 12, 14, 0)),
+            session("oldest", updated = at(2026, Calendar.JUNE, 1, 8, 0)),
+        ))
+
+        val rows = buildSessionRows(tree, now, utc)
+
+        assertEquals(
+            "TODAY groups first, then EARLIER in server order",
+            listOf(
+                "newest" to SessionSection.TODAY,
+                "older" to SessionSection.EARLIER,
+                "oldest" to SessionSection.EARLIER,
+            ),
+            rows.map { it.session.id to it.section },
+        )
+        // Contiguity stated directly as "one run per section": collapse consecutive repeats and
+        // there must be exactly two runs. This is the property that makes the screen emit the same
+        // header exactly once -- the review's bug rendered `EARLIER | TODAY | EARLIER`, i.e. THREE
+        // runs, from a three-row list.
+        assertEquals(
+            "each section must occupy exactly one contiguous run, so the screen emits one header each",
+            listOf(SessionSection.TODAY, SessionSection.EARLIER),
+            runsOf(rows.map { it.section }),
+        )
+    }
+
+    /**
+     * A promoted orphan is its OWN group -- its parent is not in the list -- so it heads by its own
+     * timestamp, with nothing to inherit from a parent that is not on screen.
+     *
+     * Mutation caught: reading the group stamp from a `parentID` lookup that does not exist, or
+     * dropping orphans from the group ordering entirely.
+     */
+    @Test
+    fun aPromotedOrphanIsItsOwnGroupAndUsesItsOwnTimestamp() {
+        val tree = buildSessionTree(listOf(
+            session("fresh_orphan", parentID = "ses_absent", updated = at(2026, Calendar.SEPTEMBER, 12, 11, 0)),
+            session("stale_orphan", parentID = "ses_gone", updated = at(2026, Calendar.SEPTEMBER, 3, 11, 0)),
+        ))
+
+        val rows = buildSessionRows(tree, now, utc)
+
+        assertEquals(
+            listOf("fresh_orphan" to SessionSection.TODAY, "stale_orphan" to SessionSection.EARLIER),
+            rows.map { it.session.id to it.section },
+        )
+        assertTrue("and both are still sub-agents", rows.all { it.isSubAgent })
+    }
+
+    /**
+     * A group whose EVERY session is undated is EARLIER, and an undated child must not drag an
+     * undated group into TODAY by accident.
+     *
+     * Mutation caught: defaulting a missing group stamp to `now`.
+     */
+    @Test
+    fun aGroupWithNoTimestampsAnywhere_isUnderEarlier() {
+        val tree = buildSessionTree(listOf(
+            SessionInfo(id = "bare_parent"),
+            SessionInfo(id = "bare_child", parentID = "bare_parent"),
+        ))
+
+        val rows = buildSessionRows(tree, now, utc)
+
+        assertTrue("no timestamp anywhere means no recency, got ${rows.map { it.section }}",
+            rows.all { it.section == SessionSection.EARLIER })
+    }
+
+    /** Collapses consecutive repeats, so `[T, E, E, T]` becomes `[T, E, T]` -- three runs. */
+    private fun runsOf(sections: List<SessionSection>): List<SessionSection> =
+        sections.fold(mutableListOf()) { acc, section ->
+            if (acc.lastOrNull() != section) acc += section
+            acc
+        }
+
     // --- relative timestamps --------------------------------------------------------------------
 
     /** Mutation caught: a fixed literal, or a "hours since" that never says `now`. */

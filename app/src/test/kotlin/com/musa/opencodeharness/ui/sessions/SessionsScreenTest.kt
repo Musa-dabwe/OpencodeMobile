@@ -76,8 +76,10 @@ class SessionsScreenTest {
         )
     }
 
-    private fun show() = rule.setContent {
-        OpenCodeMobileTheme { SessionsScreen(roots = tree, nowMillis = now) }
+    private fun show() = show(tree)
+
+    private fun show(roots: List<com.musa.opencodeharness.data.SessionNode>) = rule.setContent {
+        OpenCodeMobileTheme { SessionsScreen(roots = roots, nowMillis = now) }
     }
 
     // --- the header and the controls the design names --------------------------------------------
@@ -194,6 +196,91 @@ class SessionsScreenTest {
 
         rule.onNodeWithTag(sessionsRowTag("ses_root"))
             .assert(hasNoMetaSegment(SUB_AGENT_QUALIFIER))
+    }
+
+    /**
+     * ONE header per section, and a sub-agent never separated from its parent by one.
+     *
+     * The interleaving the code review built: a parent from three days ago whose sub-agent ran a
+     * minute ago, plus a genuinely recent root and a genuinely old one. Computed per row, this
+     * rendered `EARLIER | stale_parent`, `TODAY | fresh_child` -- the child torn out from under
+     * its own parent by a header, which is exactly what the design's nesting forbids.
+     *
+     * `onNodeWithText` throws on more than one match, so these lookups ARE the "exactly one header"
+     * assertion: a regression that emits the same header twice cannot pass.
+     *
+     * Mutation caught: reverting to a per-row `sectionFor`, or dropping the group ordering.
+     */
+    @Test
+    fun aStaleParentWhoseChildRanToday_staysUnderOneHeader() {
+        show(
+            com.musa.opencodeharness.data.buildSessionTree(
+                listOf(
+                    session("stale_parent", "Stale parent", updated = now - 3 * 24 * 3_600_000L),
+                    session("fresh_child", "Fresh child", parentID = "stale_parent", updated = now - 30_000L),
+                    session("recent_root", "Recent root", updated = now - 60_000L),
+                    session("ancient_root", "Ancient root", updated = now - 30 * 24 * 3_600_000L),
+                ),
+            ),
+        )
+
+        // Exactly one of each: a second header of the same label throws here.
+        rule.onNodeWithText(SessionSection.TODAY.label).assertIsDisplayed()
+        rule.onNodeWithText(SessionSection.EARLIER.label).assertIsDisplayed()
+
+        val parentBottom = rule.onNodeWithTag(sessionsRowTag("stale_parent")).fetchSemanticsNode().boundsInRoot.bottom
+        val childTop = rule.onNodeWithTag(sessionsRowTag("fresh_child")).fetchSemanticsNode().boundsInRoot.top
+        val childBottom = rule.onNodeWithTag(sessionsRowTag("fresh_child")).fetchSemanticsNode().boundsInRoot.bottom
+        val recentTop = rule.onNodeWithTag(sessionsRowTag("recent_root")).fetchSemanticsNode().boundsInRoot.top
+        val recentBottom = rule.onNodeWithTag(sessionsRowTag("recent_root")).fetchSemanticsNode().boundsInRoot.bottom
+        val ancientTop = rule.onNodeWithTag(sessionsRowTag("ancient_root")).fetchSemanticsNode().boundsInRoot.top
+
+        // Measured RELATIONALLY, not against a hardcoded pixel count. Compose reports a tagged
+        // node's CONTENT bounds, so adjacent rows are always separated by the row's own 10dp
+        // padding and the 1dp hairline -- a fixed ~42px here -- while a `SectionHeader` adds
+        // `sectionGap` (24dp) plus its line plus 6dp of padding on top of that. The first two
+        // rows in the fixture are known siblings with no header between them, which gives the
+        // baseline without hardcoding it.
+        val gapUnderParent = childTop - parentBottom
+        val gapUnderChild = recentTop - childBottom
+        val gapAcrossAHeader = ancientTop - recentBottom
+
+        assertEquals(
+            "the sub-agent must sit DIRECTLY under its parent: a header was inserted between them",
+            gapUnderChild,
+            gapUnderParent,
+        )
+        assertTrue(
+            "precondition: this screen really does emit section headers ($gapAcrossAHeader px vs a " +
+                "$gapUnderParent px row gap), so the comparison above is not vacuous",
+            gapAcrossAHeader > gapUnderParent * 2,
+        )
+    }
+
+    /**
+     * A server that does not sort by recency must still produce one contiguous run per section --
+     * the review's `[older, newer, oldest]` case, which used to render `EARLIER | TODAY | EARLIER`.
+     *
+     * Mutation caught: dropping the TODAY-first group ordering.
+     */
+    @Test
+    fun unsortedServerOrder_stillGroupsTodayBeforeEarlier() {
+        show(
+            com.musa.opencodeharness.data.buildSessionTree(
+                listOf(
+                    session("older", "Older root", updated = now - 2 * 24 * 3_600_000L),
+                    session("newest", "Newest root", updated = now - 20_000L),
+                    session("oldest", "Oldest root", updated = now - 40 * 24 * 3_600_000L),
+                ),
+            ),
+        )
+
+        val newestTop = rule.onNodeWithTag(sessionsRowTag("newest")).fetchSemanticsNode().boundsInRoot.top
+        val olderTop = rule.onNodeWithTag(sessionsRowTag("older")).fetchSemanticsNode().boundsInRoot.top
+        val oldestTop = rule.onNodeWithTag(sessionsRowTag("oldest")).fetchSemanticsNode().boundsInRoot.top
+
+        assertTrue("the TODAY group must come first ($newestTop, $olderTop, $oldestTop)", newestTop < olderTop)
+        assertTrue("and the EARLIER groups keep server order ($olderTop, $oldestTop)", olderTop < oldestTop)
     }
 
     // --- the dot is never the only carrier of state ----------------------------------------------
